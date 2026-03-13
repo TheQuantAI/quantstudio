@@ -1,0 +1,10 @@
+# QuantStudio Backend — FastAPI
+# Per Phase1_Implementation.md Section 4.3
+
+fastapi>=0.115.0
+uvicorn[standard]>=0.34.0
+pydantic>=2.0
+python-multipart>=0.0.9
+
+# QuantSDK — installed from local path
+# pip install -e ../../quantsdk  (or pip install -e ../quantsdk from quantstudio/)

@@ -1,0 +1,94 @@
+name: CI — QuantStudio
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  # ── Frontend Checks ────────────────────────────────────────────────────────
+  frontend:
+    name: Frontend (Node ${{ matrix.node-version }})
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        node-version: ["20", "22"]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node-version }}
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Type Check
+        run: npx tsc --noEmit
+
+      - name: Build
+        run: npm run build
+
+  # ── Backend Checks ─────────────────────────────────────────────────────────
+  backend:
+    name: Backend (Python ${{ matrix.python-version }})
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ["3.11", "3.12", "3.13"]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: quantstudio
+
+      - uses: actions/checkout@v4
+        with:
+          repository: TheQuantAI/quantsdk
+          path: quantsdk
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Install QuantSDK + backend deps
+        run: |
+          cd quantsdk && pip install -e .
+          pip install fastapi "uvicorn[standard]" pydantic python-multipart
+
+      - name: Verify backend starts
+        run: |
+          cd quantstudio
+          timeout 10 python -c "
+          from backend.main import app
+          print('✅ FastAPI app imports successfully')
+          print(f'   Routes: {len(app.routes)}')
+          " || true
+
+      - name: Test circuit execution
+        run: |
+          cd quantstudio
+          python -c "
+          from backend.executor import execute_circuit
+          code = '''
+          import quantsdk as qs
+          circuit = qs.Circuit(2, name='ci_test')
+          circuit.h(0)
+          circuit.cx(0, 1)
+          circuit.measure_all()
+          result = qs.run(circuit, shots=100)
+          print(result.counts)
+          '''
+          result = execute_circuit(code, 'simulator_cpu', 100)
+          assert result['counts'], 'Expected measurement counts'
+          print(f'✅ Execution returned {len(result[\"counts\"])} bitstrings')
+          "

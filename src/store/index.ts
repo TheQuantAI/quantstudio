@@ -1,0 +1,207 @@
+import { create } from "zustand";
+
+// ============================================================
+// Circuit Store — manages editor state and circuit execution
+// ============================================================
+
+export interface CircuitTemplate {
+  id: string;
+  name: string;
+  description: string;
+  code: string;
+  category: "entanglement" | "algorithm" | "variational" | "transform" | "protocol" | "qml" | "utility";
+}
+
+export interface CircuitMetadata {
+  numQubits: number;
+  circuitDepth: number;
+  gateCount: number;
+  simulator?: string;
+  seed?: number | null;
+}
+
+export interface ExecutionResult {
+  counts: Record<string, number>;
+  probabilities: Record<string, number>;
+  mostLikely: string;
+  shots: number;
+  backend: string;
+  executionTime: number;
+  jobId: string;
+  metadata: CircuitMetadata;
+}
+
+export interface BackendInfo {
+  id: string;
+  name: string;
+  provider: string;
+  type: "simulator" | "hardware";
+  qubits: number;
+  status: "online" | "offline" | "maintenance" | "busy";
+  queueDepth: number;
+  avgFidelity: number;
+  costPerShot: number;
+  description: string;
+  technology: string;
+  nativeGates: string[];
+  connectivity: string;
+  maxShots: number;
+  avgQueueTimeSec: number;
+  region: string;
+  features: string[];
+}
+
+interface CircuitState {
+  // Editor
+  code: string;
+  circuitName: string;
+  circuitId: string | null;
+  isDirty: boolean;
+
+  // Execution
+  isExecuting: boolean;
+  result: ExecutionResult | null;
+  error: string | null;
+  selectedBackend: string;
+
+  // Circuit visualization
+  circuitDiagram: string | null;
+
+  // Actions
+  setCode: (code: string) => void;
+  setCircuitName: (name: string) => void;
+  setCircuitId: (id: string | null) => void;
+  setExecuting: (executing: boolean) => void;
+  setResult: (result: ExecutionResult | null) => void;
+  setError: (error: string | null) => void;
+  setSelectedBackend: (backend: string) => void;
+  setCircuitDiagram: (diagram: string | null) => void;
+  resetCircuit: () => void;
+  loadTemplate: (template: CircuitTemplate) => void;
+}
+
+const DEFAULT_CODE = `import quantsdk as qs
+
+# Create a Bell State circuit
+circuit = qs.Circuit(2, name="bell_state")
+circuit.h(0)
+circuit.cx(0, 1)
+circuit.measure_all()
+
+# Run on simulator
+result = qs.run(circuit, shots=1000)
+print(result.counts)
+print(result.probabilities)
+`;
+
+export const useCircuitStore = create<CircuitState>((set) => ({
+  // Editor defaults
+  code: DEFAULT_CODE,
+  circuitName: "Untitled Circuit",
+  circuitId: null,
+  isDirty: false,
+
+  // Execution defaults
+  isExecuting: false,
+  result: null,
+  error: null,
+  selectedBackend: "simulator_cpu",
+
+  // Visualization
+  circuitDiagram: null,
+
+  // Actions
+  setCode: (code) => set({ code, isDirty: true }),
+  setCircuitName: (circuitName) => set({ circuitName, isDirty: true }),
+  setCircuitId: (circuitId) => set({ circuitId }),
+  setExecuting: (isExecuting) => set({ isExecuting }),
+  setResult: (result) => set({ result, error: null }),
+  setError: (error) => set({ error, result: null }),
+  setSelectedBackend: (selectedBackend) => set({ selectedBackend }),
+  setCircuitDiagram: (circuitDiagram) => set({ circuitDiagram }),
+  resetCircuit: () =>
+    set({
+      code: DEFAULT_CODE,
+      circuitName: "Untitled Circuit",
+      circuitId: null,
+      isDirty: false,
+      result: null,
+      error: null,
+      circuitDiagram: null,
+    }),
+  loadTemplate: (template) =>
+    set({
+      code: template.code,
+      circuitName: template.name,
+      circuitId: null,
+      isDirty: false,
+      result: null,
+      error: null,
+      circuitDiagram: null,
+    }),
+}));
+
+// ============================================================
+// Backend Store — manages backend status
+// ============================================================
+
+interface BackendState {
+  backends: BackendInfo[];
+  isLoading: boolean;
+  setBackends: (backends: BackendInfo[]) => void;
+  setLoading: (loading: boolean) => void;
+  fetchBackends: () => Promise<void>;
+}
+
+// Default backends are only used as fallback until the API responds.
+// The full enriched data comes from GET /api/backends.
+export const DEFAULT_BACKENDS: BackendInfo[] = [
+  {
+    id: "simulator_cpu", name: "CPU Simulator", provider: "TheQuantCloud",
+    type: "simulator", qubits: 25, status: "online", queueDepth: 0,
+    avgFidelity: 1.0, costPerShot: 0.0, description: "Local CPU statevector simulator.",
+    technology: "cpu", nativeGates: [], connectivity: "all-to-all",
+    maxShots: 1_000_000, avgQueueTimeSec: 0, region: "local", features: ["free-tier"],
+  },
+];
+
+export const useBackendStore = create<BackendState>((set) => ({
+  backends: DEFAULT_BACKENDS,
+  isLoading: false,
+  setBackends: (backends) => set({ backends }),
+  setLoading: (loading) => set({ isLoading: loading }),
+  fetchBackends: async () => {
+    set({ isLoading: true });
+    try {
+      const API_BASE = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
+      const res = await fetch(`${API_BASE}/api/backends`);
+      if (res.ok) {
+        const data = await res.json();
+        const mapped: BackendInfo[] = data.map((b: Record<string, unknown>) => ({
+          id: b.id as string,
+          name: b.name as string,
+          provider: b.provider as string,
+          type: b.type as BackendInfo["type"],
+          qubits: b.qubits as number,
+          status: b.status as BackendInfo["status"],
+          queueDepth: (b.queue_depth as number) || 0,
+          avgFidelity: (b.avg_fidelity as number) || 1.0,
+          costPerShot: (b.cost_per_shot as number) || 0.0,
+          description: (b.description as string) || "",
+          technology: (b.technology as string) || "",
+          nativeGates: (b.native_gates as string[]) || [],
+          connectivity: (b.connectivity as string) || "",
+          maxShots: (b.max_shots as number) || 100_000,
+          avgQueueTimeSec: (b.avg_queue_time_sec as number) || 0,
+          region: (b.region as string) || "",
+          features: (b.features as string[]) || [],
+        }));
+        set({ backends: mapped });
+      }
+    } catch {
+      // Silently fall back to defaults
+    } finally {
+      set({ isLoading: false });
+    }
+  },
+}));
