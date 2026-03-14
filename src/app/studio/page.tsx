@@ -167,9 +167,12 @@ export default function StudioPage() {
   // Close dropdowns on outside click
   useEffect(() => {
     const handleClick = () => {
+      setShowTemplates(false);
+      setShowBackendSelect(false);
       setShowMyCircuits(false);
     };
-    if (showMyCircuits) {
+    const anyOpen = showTemplates || showBackendSelect || showMyCircuits;
+    if (anyOpen) {
       // Delay to avoid closing on the button click itself
       const id = setTimeout(() => {
         document.addEventListener("click", handleClick, { once: true });
@@ -179,7 +182,7 @@ export default function StudioPage() {
         document.removeEventListener("click", handleClick);
       };
     }
-  }, [showMyCircuits]);
+  }, [showTemplates, showBackendSelect, showMyCircuits]);
 
   // Configure Monaco editor
   const handleEditorDidMount = useCallback(

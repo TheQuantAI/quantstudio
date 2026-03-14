@@ -406,6 +406,27 @@ export interface SimulationResult {
 
 export function simulateCircuit(code: string, shots: number = 1024): SimulationResult {
   const startTime = performance.now();
+
+  // Validate that code contains meaningful content
+  const strippedCode = code
+    .split("\n")
+    .filter((line) => {
+      const t = line.trim();
+      return t !== "" && !t.startsWith("#");
+    })
+    .join("\n");
+
+  if (!strippedCode.trim()) {
+    throw new Error("No code to execute. Write a quantum circuit using QuantSDK.");
+  }
+
+  // Check for a circuit declaration
+  if (!/(?:qs|quantsdk)\.Circuit\s*\(/.test(strippedCode)) {
+    throw new Error(
+      "No quantum circuit found. Create one with: circuit = qs.Circuit(n_qubits)"
+    );
+  }
+
   const { nQubits, ops, circuitName } = parsePythonCode(code);
 
   if (nQubits > 20) {
@@ -413,6 +434,14 @@ export function simulateCircuit(code: string, shots: number = 1024): SimulationR
   }
   if (nQubits < 1) {
     throw new Error("Circuit must have at least 1 qubit.");
+  }
+
+  // Check that at least one gate operation exists
+  const gateOps = ops.filter((op) => op.type !== "barrier" && op.type !== "measure");
+  if (gateOps.length === 0) {
+    throw new Error(
+      "Circuit has no gates. Add gates like circuit.h(0), circuit.cx(0, 1), etc."
+    );
   }
 
   // Initialize |00...0⟩ state
