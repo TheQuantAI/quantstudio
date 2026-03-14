@@ -249,13 +249,13 @@ class Circuit:
     def sx(self, q):  self._ops.append(("single", "sx", q)); self._track([q])
     def id(self, q):  pass  # identity no-op
 
-    # Parameterized single-qubit
-    def rx(self, theta, q): self._ops.append(("single", "rx", q, theta)); self._track([q])
-    def ry(self, theta, q): self._ops.append(("single", "ry", q, theta)); self._track([q])
-    def rz(self, theta, q): self._ops.append(("single", "rz", q, theta)); self._track([q])
-    def p(self, theta, q):  self._ops.append(("single", "rz", q, theta)); self._track([q])
-    def phase(self, theta, q): self.p(theta, q)
-    def u1(self, theta, q): self.p(theta, q)
+    # Parameterized single-qubit — QuantSDK convention: (qubit, angle)
+    def rx(self, q, theta): self._ops.append(("single", "rx", q, theta)); self._track([q])
+    def ry(self, q, theta): self._ops.append(("single", "ry", q, theta)); self._track([q])
+    def rz(self, q, theta): self._ops.append(("single", "rz", q, theta)); self._track([q])
+    def p(self, q, theta):  self._ops.append(("single", "rz", q, theta)); self._track([q])
+    def phase(self, q, theta): self.p(q, theta)
+    def u1(self, q, theta): self.p(q, theta)
 
     # Two-qubit gates
     def cx(self, ctrl, tgt):  self._ops.append(("controlled", "x", ctrl, tgt)); self._track([ctrl, tgt])
@@ -263,9 +263,10 @@ class Circuit:
     def cz(self, ctrl, tgt):  self._ops.append(("controlled", "z", ctrl, tgt)); self._track([ctrl, tgt])
     def cy(self, ctrl, tgt):  self._ops.append(("controlled", "y", ctrl, tgt)); self._track([ctrl, tgt])
     def ch(self, ctrl, tgt):  self._ops.append(("controlled", "h", ctrl, tgt)); self._track([ctrl, tgt])
-    def crx(self, theta, ctrl, tgt): self._ops.append(("controlled", "rx", ctrl, tgt, theta)); self._track([ctrl, tgt])
-    def cry(self, theta, ctrl, tgt): self._ops.append(("controlled", "ry", ctrl, tgt, theta)); self._track([ctrl, tgt])
-    def crz(self, theta, ctrl, tgt): self._ops.append(("controlled", "rz", ctrl, tgt, theta)); self._track([ctrl, tgt])
+    def cp(self, ctrl, tgt, theta): self._ops.append(("controlled", "rz", ctrl, tgt, theta)); self._track([ctrl, tgt])
+    def crx(self, ctrl, tgt, theta): self._ops.append(("controlled", "rx", ctrl, tgt, theta)); self._track([ctrl, tgt])
+    def cry(self, ctrl, tgt, theta): self._ops.append(("controlled", "ry", ctrl, tgt, theta)); self._track([ctrl, tgt])
+    def crz(self, ctrl, tgt, theta): self._ops.append(("controlled", "rz", ctrl, tgt, theta)); self._track([ctrl, tgt])
     def swap(self, q1, q2): self._ops.append(("swap", q1, q2)); self._track([q1, q2])
 
     # Three-qubit gates

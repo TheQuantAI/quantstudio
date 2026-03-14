@@ -241,10 +241,10 @@ function parsePythonCode(code: string): { nQubits: number; ops: GateOp[]; circui
       if (gateName === "id") continue; // identity — no-op
       ops.push({ type: "single", gate: gateName, qubit: args[0] });
     }
-    // Parameterized single-qubit gates
+    // Parameterized single-qubit gates — QuantSDK convention: (qubit, angle)
     else if (["rx", "ry", "rz", "p", "phase", "u1"].includes(gateName)) {
       const normalizedGate = gateName === "p" || gateName === "phase" || gateName === "u1" ? "rz" : gateName;
-      ops.push({ type: "single", gate: normalizedGate, qubit: args[1] !== undefined ? args[1] : args[0], param: args[0] });
+      ops.push({ type: "single", gate: normalizedGate, qubit: args[0], param: args[1] });
     }
     // Two-qubit gates
     else if (["cx", "cnot"].includes(gateName)) {
@@ -255,12 +255,16 @@ function parsePythonCode(code: string): { nQubits: number; ops: GateOp[]; circui
       ops.push({ type: "controlled", gate: "y", control: args[0], target: args[1] });
     } else if (gateName === "ch") {
       ops.push({ type: "controlled", gate: "h", control: args[0], target: args[1] });
+    } else if (gateName === "cp") {
+      // Controlled-phase: (control, target, angle)
+      ops.push({ type: "controlled", gate: "rz", control: args[0], target: args[1], param: args[2] });
     } else if (gateName === "crx") {
-      ops.push({ type: "controlled", gate: "rx", control: args[1], target: args[2], param: args[0] });
+      // QuantSDK convention: (control, target, angle)
+      ops.push({ type: "controlled", gate: "rx", control: args[0], target: args[1], param: args[2] });
     } else if (gateName === "cry") {
-      ops.push({ type: "controlled", gate: "ry", control: args[1], target: args[2], param: args[0] });
+      ops.push({ type: "controlled", gate: "ry", control: args[0], target: args[1], param: args[2] });
     } else if (gateName === "crz") {
-      ops.push({ type: "controlled", gate: "rz", control: args[1], target: args[2], param: args[0] });
+      ops.push({ type: "controlled", gate: "rz", control: args[0], target: args[1], param: args[2] });
     }
     // SWAP
     else if (gateName === "swap") {
@@ -439,6 +443,15 @@ export function simulateCircuit(code: string, shots: number = 1024): SimulationR
   // Check that at least one gate operation exists
   const gateOps = ops.filter((op) => op.type !== "barrier" && op.type !== "measure");
   if (gateOps.length === 0) {
+    // Check if the code uses functions/loops — hint user to check Python Terminal
+    const usesFunctions = /\bdef\s+\w+/.test(code);
+    const usesLoops = /\bfor\s+\w+/.test(code);
+    if (usesFunctions || usesLoops) {
+      throw new Error(
+        "This circuit uses Python functions/loops which require the Python Terminal. " +
+        "Check the Terminal tab below for full output."
+      );
+    }
     throw new Error(
       "Circuit has no gates. Add gates like circuit.h(0), circuit.cx(0, 1), etc."
     );
