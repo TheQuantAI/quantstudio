@@ -338,7 +338,7 @@ export default function StudioPage() {
             <ChevronDown className="h-3 w-3" />
           </Button>
           {showTemplates && (
-            <div className="absolute top-full left-0 mt-1 w-72 bg-card border border-border rounded-lg shadow-lg z-50 py-1">
+            <div className="absolute top-full left-0 mt-1 w-72 bg-card border border-border rounded-lg shadow-lg z-50 py-1 max-h-80 overflow-y-auto">
               {CIRCUIT_TEMPLATES.map((template) => (
                 <button
                   key={template.id}

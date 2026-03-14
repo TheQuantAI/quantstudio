@@ -41,22 +41,30 @@ export interface CircuitResponse {
   updated_at: string;
 }
 
-/** Run a quantum circuit via the FastAPI backend */
+/** Run a quantum circuit via the FastAPI backend, with browser simulator fallback */
 export async function runCircuit(
   code: string,
   shots: number = 1024,
   backend: string = "simulator_cpu"
 ): Promise<ExecutionResult> {
-  const res = await fetch(`${API_BASE}/api/run`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ code, shots, backend }),
-  });
-  if (!res.ok) {
-    const body = await res.json().catch(() => null);
-    throw new Error(body?.detail || `Execution failed (HTTP ${res.status})`);
+  // Try the FastAPI backend first
+  try {
+    const res = await fetch(`${API_BASE}/api/run`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ code, shots, backend }),
+      signal: AbortSignal.timeout(5000), // 5s timeout
+    });
+    if (!res.ok) {
+      const body = await res.json().catch(() => null);
+      throw new Error(body?.detail || `Execution failed (HTTP ${res.status})`);
+    }
+    return res.json();
+  } catch {
+    // Backend unreachable — fall back to browser simulator
+    const { simulateCircuit } = await import("./simulator");
+    return simulateCircuit(code, shots);
   }
-  return res.json();
 }
 
 /** Fetch available backends */
