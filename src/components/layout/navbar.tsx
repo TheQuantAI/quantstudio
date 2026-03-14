@@ -85,7 +85,7 @@ export function Navbar() {
         {/* Right side */}
         <div className="flex items-center gap-2">
           <a
-            href="https://github.com/TheQuantAI/quantsdk"
+            href="https://github.com/TheQuantAI/quantstudio"
             target="_blank"
             rel="noopener noreferrer"
           >

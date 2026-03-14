@@ -100,7 +100,7 @@ export default function HomePage() {
                 </Button>
               </Link>
               <a
-                href="https://github.com/TheQuantAI/quantsdk"
+                href="https://github.com/TheQuantAI/quantstudio"
                 target="_blank"
                 rel="noopener noreferrer"
               >
@@ -283,7 +283,7 @@ export default function HomePage() {
                 TheQuantCloud
               </a>
               <a
-                href="https://github.com/TheQuantAI/quantsdk"
+                href="https://github.com/TheQuantAI/quantstudio"
                 className="hover:text-foreground transition-colors"
               >
                 GitHub
