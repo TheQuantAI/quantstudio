@@ -64,7 +64,10 @@ const PythonTerminal = dynamic(() => import("@/components/python-terminal"), {
 });
 
 // Right panel tab types
-type RightPanelTab = "results" | "probabilities" | "circuit" | "stats" | "output";
+type RightPanelTab = "results" | "probabilities" | "circuit" | "stats";
+
+// Bottom panel tab types
+type BottomPanelTab = "terminal" | "output";
 
 // Console log entry
 interface ConsoleEntry {
@@ -104,6 +107,7 @@ export default function StudioPage() {
   const [histogramMode, setHistogramMode] = useState<"counts" | "probabilities">("counts");
   const [terminalOpen, setTerminalOpen] = useState(true);
   const [terminalHeight, setTerminalHeight] = useState(200);
+  const [bottomTab, setBottomTab] = useState<BottomPanelTab>("terminal");
 
   // Console output log
   const [consoleLog, setConsoleLog] = useState<ConsoleEntry[]>([]);
@@ -313,7 +317,9 @@ export default function StudioPage() {
   const handleRun = useCallback(async () => {
     setExecuting(true);
     setError(null);
-    setRightPanelTab("output");
+    setRightPanelTab("results");
+    setTerminalOpen(true);
+    setBottomTab("terminal");
     addLog("info", `Executing circuit "${circuitName}" on ${selectedBackend}...`);
     addLog("info", `Shots: 1024`);
 
@@ -371,7 +377,7 @@ export default function StudioPage() {
     } finally {
       setExecuting(false);
     }
-  }, [code, circuitName, selectedBackend, setExecuting, setResult, setError, setCircuitDiagram, addLog, terminalOpen]);
+  }, [code, circuitName, selectedBackend, setExecuting, setResult, setError, setCircuitDiagram, addLog, terminalOpen, setBottomTab]);
 
   const handleCopyCode = useCallback(() => {
     navigator.clipboard.writeText(code);
@@ -636,20 +642,46 @@ export default function StudioPage() {
           />
           </div>
 
-          {/* Terminal toggle bar + terminal pane */}
+          {/* Bottom panel: tab bar + content */}
           <div
-            className="border-t border-border flex items-center px-3 py-1 bg-[#161b22] cursor-pointer select-none shrink-0"
-            onClick={() => setTerminalOpen((v) => !v)}
+            className="border-t border-border flex items-center px-3 py-1 bg-[#161b22] select-none shrink-0 gap-1"
           >
-            <Terminal className="h-3.5 w-3.5 text-muted-foreground mr-2" />
-            <span className="text-xs font-medium text-muted-foreground">Python Terminal</span>
-            <span className="text-[10px] text-muted-foreground/60 ml-2">Pyodide</span>
+            <button
+              className={`flex items-center gap-1.5 px-2 py-0.5 text-xs font-medium rounded transition-colors ${
+                bottomTab === "terminal"
+                  ? "text-quantum bg-quantum/10"
+                  : "text-muted-foreground hover:text-foreground"
+              }`}
+              onClick={() => { setBottomTab("terminal"); setTerminalOpen(true); }}
+            >
+              <Terminal className="h-3 w-3" />
+              Terminal
+            </button>
+            <button
+              className={`flex items-center gap-1.5 px-2 py-0.5 text-xs font-medium rounded transition-colors ${
+                bottomTab === "output"
+                  ? "text-quantum bg-quantum/10"
+                  : "text-muted-foreground hover:text-foreground"
+              }`}
+              onClick={() => { setBottomTab("output"); setTerminalOpen(true); }}
+            >
+              <BarChart3 className="h-3 w-3" />
+              Output
+            </button>
+            <span className="text-[10px] text-muted-foreground/50 ml-1">
+              {bottomTab === "terminal" ? "Pyodide" : "Console"}
+            </span>
             <div className="flex-1" />
-            {terminalOpen ? (
-              <ChevronDown className="h-3.5 w-3.5 text-muted-foreground" />
-            ) : (
-              <ChevronUp className="h-3.5 w-3.5 text-muted-foreground" />
-            )}
+            <button
+              className="text-muted-foreground hover:text-foreground transition-colors p-0.5"
+              onClick={() => setTerminalOpen((v) => !v)}
+            >
+              {terminalOpen ? (
+                <ChevronDown className="h-3.5 w-3.5" />
+              ) : (
+                <ChevronUp className="h-3.5 w-3.5" />
+              )}
+            </button>
           </div>
           {terminalOpen && (
             <div
@@ -675,7 +707,51 @@ export default function StudioPage() {
                   document.addEventListener("mouseup", onUp);
                 }}
               />
-              <PythonTerminal ref={terminalRef} className="h-full" />
+              {/* Terminal content */}
+              <div className={`h-full ${bottomTab === "terminal" ? "" : "hidden"}`}>
+                <PythonTerminal ref={terminalRef} className="h-full" />
+              </div>
+              {/* Output console content */}
+              <div className={`h-full overflow-y-auto p-3 font-mono text-xs ${bottomTab === "output" ? "" : "hidden"}`} style={{ background: "#0d1117" }}>
+                {consoleLog.length === 0 ? (
+                  <div className="text-muted-foreground text-center py-8">
+                    <Terminal className="h-8 w-8 mx-auto mb-2 opacity-30" />
+                    <p>Run a circuit to see output here</p>
+                  </div>
+                ) : (
+                  <>
+                    <div className="flex justify-end mb-1">
+                      <button
+                        className="text-[10px] text-muted-foreground hover:text-foreground px-2 py-0.5 rounded border border-border/50 transition-colors"
+                        onClick={() => { setConsoleLog([]); logIdRef.current = 0; }}
+                      >
+                        Clear
+                      </button>
+                    </div>
+                    {consoleLog.map((entry) => (
+                      <div key={entry.id} className="flex gap-2 leading-5">
+                        <span className="text-muted-foreground/60 select-none shrink-0">
+                          [{entry.timestamp}]
+                        </span>
+                        <span
+                          className={
+                            entry.type === "error"
+                              ? "text-red-400"
+                              : entry.type === "success"
+                              ? "text-green-400"
+                              : entry.type === "warn"
+                              ? "text-yellow-400"
+                              : "text-foreground/80"
+                          }
+                        >
+                          {entry.message}
+                        </span>
+                      </div>
+                    ))}
+                    <div ref={consoleEndRef} />
+                  </>
+                )}
+              </div>
             </div>
           )}
         </div>
@@ -690,7 +766,6 @@ export default function StudioPage() {
                 { id: "probabilities" as RightPanelTab, label: "Probabilities", icon: <PieChart className="h-3.5 w-3.5" /> },
                 { id: "circuit" as RightPanelTab, label: "Circuit", icon: <Terminal className="h-3.5 w-3.5" /> },
                 { id: "stats" as RightPanelTab, label: "Stats", icon: <Info className="h-3.5 w-3.5" /> },
-                { id: "output" as RightPanelTab, label: "Output", icon: <Terminal className="h-3.5 w-3.5" /> },
               ] as const
             ).map((tab) => (
               <button
@@ -937,53 +1012,6 @@ export default function StudioPage() {
                     metadata={result.metadata}
                   />
                 )}
-              </div>
-            )}
-
-            {/* ── Output / Console Tab ── */}
-            {rightPanelTab === "output" && (
-              <div className="flex flex-col h-full">
-                <div className="flex items-center justify-between mb-2">
-                  <h3 className="text-sm font-semibold text-muted-foreground uppercase tracking-wide">
-                    Output
-                  </h3>
-                  <button
-                    className="text-[10px] text-muted-foreground hover:text-foreground px-2 py-0.5 rounded border border-border transition-colors"
-                    onClick={() => { setConsoleLog([]); logIdRef.current = 0; }}
-                  >
-                    Clear
-                  </button>
-                </div>
-                <div className="flex-1 rounded-lg border border-border bg-[#0d1117] font-mono text-xs overflow-y-auto p-3 min-h-[200px]">
-                  {consoleLog.length === 0 ? (
-                    <div className="text-muted-foreground text-center py-8">
-                      <Terminal className="h-8 w-8 mx-auto mb-2 opacity-30" />
-                      <p>Run a circuit to see output here</p>
-                    </div>
-                  ) : (
-                    consoleLog.map((entry) => (
-                      <div key={entry.id} className="flex gap-2 leading-5">
-                        <span className="text-muted-foreground/60 select-none shrink-0">
-                          [{entry.timestamp}]
-                        </span>
-                        <span
-                          className={
-                            entry.type === "error"
-                              ? "text-red-400"
-                              : entry.type === "success"
-                              ? "text-green-400"
-                              : entry.type === "warn"
-                              ? "text-yellow-400"
-                              : "text-foreground/80"
-                          }
-                        >
-                          {entry.message}
-                        </span>
-                      </div>
-                    ))
-                  )}
-                  <div ref={consoleEndRef} />
-                </div>
               </div>
             )}
 
