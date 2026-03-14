@@ -1,6 +1,26 @@
 import { CircuitTemplate } from "@/store";
 
 export const CIRCUIT_TEMPLATES: CircuitTemplate[] = [
+  // ─── Default ───
+  {
+    id: "untitled_circuit",
+    name: "Untitled Circuit",
+    description: "Default starter template — Bell State with basic measurements",
+    category: "entanglement",
+    code: `import quantsdk as qs
+
+# Create a Bell State circuit
+circuit = qs.Circuit(2, name="bell_state")
+circuit.h(0)
+circuit.cx(0, 1)
+circuit.measure_all()
+
+# Run on simulator
+result = qs.run(circuit, shots=1000)
+print(result.counts)
+print(result.probabilities)
+`,
+  },
   // ─── Entanglement ───
   {
     id: "bell_state",
