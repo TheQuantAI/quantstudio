@@ -49,7 +49,15 @@ const MonacoEditor = dynamic(() => import("@monaco-editor/react"), {
 });
 
 // Right panel tab types
-type RightPanelTab = "results" | "probabilities" | "circuit" | "stats";
+type RightPanelTab = "results" | "probabilities" | "circuit" | "stats" | "output";
+
+// Console log entry
+interface ConsoleEntry {
+  id: number;
+  timestamp: string;
+  type: "info" | "success" | "error" | "warn";
+  message: string;
+}
 
 export default function StudioPage() {
   const {
@@ -78,6 +86,26 @@ export default function StudioPage() {
   const [showBackendSelect, setShowBackendSelect] = useState(false);
   const [rightPanelTab, setRightPanelTab] = useState<RightPanelTab>("results");
   const [histogramMode, setHistogramMode] = useState<"counts" | "probabilities">("counts");
+
+  // Console output log
+  const [consoleLog, setConsoleLog] = useState<ConsoleEntry[]>([]);
+  const consoleEndRef = useRef<HTMLDivElement>(null);
+  const logIdRef = useRef(0);
+
+  const addLog = useCallback((type: ConsoleEntry["type"], message: string) => {
+    const entry: ConsoleEntry = {
+      id: ++logIdRef.current,
+      timestamp: new Date().toLocaleTimeString("en-US", { hour12: false, hour: "2-digit", minute: "2-digit", second: "2-digit" }),
+      type,
+      message,
+    };
+    setConsoleLog((prev) => [...prev, entry]);
+  }, []);
+
+  // Auto-scroll console to bottom
+  useEffect(() => {
+    consoleEndRef.current?.scrollIntoView({ behavior: "smooth" });
+  }, [consoleLog]);
 
   // Save/Load state
   const [showMyCircuits, setShowMyCircuits] = useState(false);
@@ -267,9 +295,29 @@ export default function StudioPage() {
   const handleRun = useCallback(async () => {
     setExecuting(true);
     setError(null);
+    setRightPanelTab("output");
+    addLog("info", `Executing circuit "${circuitName}" on ${selectedBackend}...`);
+    addLog("info", `Shots: 1024`);
 
     try {
       const data = await runCircuit(code, 1024, selectedBackend);
+
+      addLog("success", `Execution complete in ${data.execution_time.toFixed(4)}s`);
+      addLog("info", `Backend: ${data.backend}`);
+      addLog("info", `Qubits: ${data.metadata?.num_qubits ?? "?"} | Depth: ${data.metadata?.circuit_depth ?? "?"} | Gates: ${data.metadata?.gate_count ?? "?"}`);
+      addLog("info", `Most likely state: |${data.most_likely}⟩`);
+
+      // Log top measurement results
+      const sorted = Object.entries(data.counts).sort((a, b) => b[1] - a[1]);
+      const topN = sorted.slice(0, 8);
+      for (const [state, count] of topN) {
+        const pct = ((count / data.shots) * 100).toFixed(1);
+        addLog("info", `  |${state}⟩ : ${count}  (${pct}%)`);
+      }
+      if (sorted.length > 8) {
+        addLog("info", `  ... and ${sorted.length - 8} more states`);
+      }
+      addLog("success", `Job ID: ${data.job_id}`);
 
       setResult({
         counts: data.counts,
@@ -292,15 +340,15 @@ export default function StudioPage() {
         setCircuitDiagram(data.circuit_diagram);
       }
     } catch (err) {
-      setError(
-        err instanceof Error
-          ? err.message
-          : "Execution failed. Please check your circuit code."
-      );
+      const msg = err instanceof Error
+        ? err.message
+        : "Execution failed. Please check your circuit code.";
+      addLog("error", msg);
+      setError(msg);
     } finally {
       setExecuting(false);
     }
-  }, [code, selectedBackend, setExecuting, setResult, setError, setCircuitDiagram]);
+  }, [code, circuitName, selectedBackend, setExecuting, setResult, setError, setCircuitDiagram, addLog]);
 
   const handleCopyCode = useCallback(() => {
     navigator.clipboard.writeText(code);
@@ -573,6 +621,7 @@ export default function StudioPage() {
                 { id: "probabilities" as RightPanelTab, label: "Probabilities", icon: <PieChart className="h-3.5 w-3.5" /> },
                 { id: "circuit" as RightPanelTab, label: "Circuit", icon: <Terminal className="h-3.5 w-3.5" /> },
                 { id: "stats" as RightPanelTab, label: "Stats", icon: <Info className="h-3.5 w-3.5" /> },
+                { id: "output" as RightPanelTab, label: "Output", icon: <Terminal className="h-3.5 w-3.5" /> },
               ] as const
             ).map((tab) => (
               <button
@@ -819,6 +868,53 @@ export default function StudioPage() {
                     metadata={result.metadata}
                   />
                 )}
+              </div>
+            )}
+
+            {/* ── Output / Console Tab ── */}
+            {rightPanelTab === "output" && (
+              <div className="flex flex-col h-full">
+                <div className="flex items-center justify-between mb-2">
+                  <h3 className="text-sm font-semibold text-muted-foreground uppercase tracking-wide">
+                    Output
+                  </h3>
+                  <button
+                    className="text-[10px] text-muted-foreground hover:text-foreground px-2 py-0.5 rounded border border-border transition-colors"
+                    onClick={() => { setConsoleLog([]); logIdRef.current = 0; }}
+                  >
+                    Clear
+                  </button>
+                </div>
+                <div className="flex-1 rounded-lg border border-border bg-[#0d1117] font-mono text-xs overflow-y-auto p-3 min-h-[200px]">
+                  {consoleLog.length === 0 ? (
+                    <div className="text-muted-foreground text-center py-8">
+                      <Terminal className="h-8 w-8 mx-auto mb-2 opacity-30" />
+                      <p>Run a circuit to see output here</p>
+                    </div>
+                  ) : (
+                    consoleLog.map((entry) => (
+                      <div key={entry.id} className="flex gap-2 leading-5">
+                        <span className="text-muted-foreground/60 select-none shrink-0">
+                          [{entry.timestamp}]
+                        </span>
+                        <span
+                          className={
+                            entry.type === "error"
+                              ? "text-red-400"
+                              : entry.type === "success"
+                              ? "text-green-400"
+                              : entry.type === "warn"
+                              ? "text-yellow-400"
+                              : "text-foreground/80"
+                          }
+                        >
+                          {entry.message}
+                        </span>
+                      </div>
+                    ))
+                  )}
+                  <div ref={consoleEndRef} />
+                </div>
               </div>
             )}
 

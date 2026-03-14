@@ -74,57 +74,126 @@ export async function fetchBackends(): Promise<BackendInfo[]> {
   return res.json();
 }
 
-/** Save a circuit */
+// ─── localStorage helpers for circuit persistence ───────────────
+
+const LS_KEY = "quantstudio_circuits";
+
+function getLocalCircuits(): CircuitResponse[] {
+  if (typeof window === "undefined") return [];
+  try {
+    return JSON.parse(localStorage.getItem(LS_KEY) || "[]");
+  } catch {
+    return [];
+  }
+}
+
+function setLocalCircuits(circuits: CircuitResponse[]): void {
+  localStorage.setItem(LS_KEY, JSON.stringify(circuits));
+}
+
+/** Save a circuit — tries API, falls back to localStorage */
 export async function saveCircuit(
   name: string,
   code: string,
   description: string = "",
   userId: string = "anonymous"
 ): Promise<CircuitResponse> {
-  const res = await fetch(`${API_BASE}/api/circuits`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ name, code, description, user_id: userId }),
-  });
-  if (!res.ok) throw new Error("Failed to save circuit");
-  return res.json();
+  try {
+    const res = await fetch(`${API_BASE}/api/circuits`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name, code, description, user_id: userId }),
+      signal: AbortSignal.timeout(3000),
+    });
+    if (!res.ok) throw new Error("API error");
+    return res.json();
+  } catch {
+    // Fallback: save to localStorage
+    const now = new Date().toISOString();
+    const circuit: CircuitResponse = {
+      id: `local-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`,
+      name,
+      code,
+      description,
+      user_id: userId,
+      created_at: now,
+      updated_at: now,
+    };
+    const circuits = getLocalCircuits();
+    circuits.unshift(circuit);
+    setLocalCircuits(circuits);
+    return circuit;
+  }
 }
 
-/** List saved circuits (optionally by user) */
+/** List saved circuits — tries API, falls back to localStorage */
 export async function listCircuits(userId?: string): Promise<CircuitResponse[]> {
-  const url = userId
-    ? `${API_BASE}/api/circuits?user_id=${encodeURIComponent(userId)}`
-    : `${API_BASE}/api/circuits`;
-  const res = await fetch(url);
-  if (!res.ok) throw new Error("Failed to list circuits");
-  return res.json();
+  try {
+    const url = userId
+      ? `${API_BASE}/api/circuits?user_id=${encodeURIComponent(userId)}`
+      : `${API_BASE}/api/circuits`;
+    const res = await fetch(url, { signal: AbortSignal.timeout(3000) });
+    if (!res.ok) throw new Error("API error");
+    return res.json();
+  } catch {
+    const all = getLocalCircuits();
+    return userId ? all.filter((c) => c.user_id === userId) : all;
+  }
 }
 
-/** Load a circuit by ID */
+/** Load a circuit by ID — tries API, falls back to localStorage */
 export async function getCircuit(id: string): Promise<CircuitResponse> {
-  const res = await fetch(`${API_BASE}/api/circuits/${id}`);
-  if (!res.ok) throw new Error("Circuit not found");
-  return res.json();
+  try {
+    const res = await fetch(`${API_BASE}/api/circuits/${id}`, {
+      signal: AbortSignal.timeout(3000),
+    });
+    if (!res.ok) throw new Error("API error");
+    return res.json();
+  } catch {
+    const circuit = getLocalCircuits().find((c) => c.id === id);
+    if (!circuit) throw new Error("Circuit not found");
+    return circuit;
+  }
 }
 
-/** Update an existing circuit */
+/** Update an existing circuit — tries API, falls back to localStorage */
 export async function updateCircuit(
   id: string,
   updates: { name?: string; code?: string; description?: string }
 ): Promise<CircuitResponse> {
-  const res = await fetch(`${API_BASE}/api/circuits/${id}`, {
-    method: "PUT",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(updates),
-  });
-  if (!res.ok) throw new Error("Failed to update circuit");
-  return res.json();
+  try {
+    const res = await fetch(`${API_BASE}/api/circuits/${id}`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(updates),
+      signal: AbortSignal.timeout(3000),
+    });
+    if (!res.ok) throw new Error("API error");
+    return res.json();
+  } catch {
+    const circuits = getLocalCircuits();
+    const idx = circuits.findIndex((c) => c.id === id);
+    if (idx === -1) throw new Error("Circuit not found");
+    circuits[idx] = {
+      ...circuits[idx],
+      ...updates,
+      updated_at: new Date().toISOString(),
+    };
+    setLocalCircuits(circuits);
+    return circuits[idx];
+  }
 }
 
-/** Delete a circuit */
+/** Delete a circuit — tries API, falls back to localStorage */
 export async function deleteCircuit(id: string): Promise<void> {
-  const res = await fetch(`${API_BASE}/api/circuits/${id}`, {
-    method: "DELETE",
-  });
-  if (!res.ok) throw new Error("Failed to delete circuit");
+  try {
+    const res = await fetch(`${API_BASE}/api/circuits/${id}`, {
+      method: "DELETE",
+      signal: AbortSignal.timeout(3000),
+    });
+    if (!res.ok) throw new Error("API error");
+  } catch {
+    const circuits = getLocalCircuits().filter((c) => c.id !== id);
+    setLocalCircuits(circuits);
+  }
 }
