@@ -13,6 +13,7 @@ import {
   StateSummary,
   ResultsExport,
 } from "@/components/viz";
+import type { PythonTerminalHandle } from "@/components/python-terminal";
 import {
   Play,
   RotateCcw,
@@ -20,6 +21,7 @@ import {
   Copy,
   FileCode2,
   ChevronDown,
+  ChevronUp,
   Server,
   Loader2,
   BarChart3,
@@ -43,6 +45,19 @@ const MonacoEditor = dynamic(() => import("@monaco-editor/react"), {
       <div className="flex items-center gap-2 text-muted-foreground">
         <Loader2 className="h-5 w-5 animate-spin" />
         <span>Loading editor...</span>
+      </div>
+    </div>
+  ),
+});
+
+// Dynamically import Python terminal
+const PythonTerminal = dynamic(() => import("@/components/python-terminal"), {
+  ssr: false,
+  loading: () => (
+    <div className="flex items-center justify-center h-full" style={{ background: "#0d1117" }}>
+      <div className="flex items-center gap-2 text-gray-400 text-sm">
+        <Loader2 className="h-4 w-4 animate-spin" />
+        <span>Loading terminal...</span>
       </div>
     </div>
   ),
@@ -82,10 +97,13 @@ export default function StudioPage() {
   const { backends } = useBackendStore();
   const { data: session } = useSession();
   const editorRef = useRef<unknown>(null);
+  const terminalRef = useRef<PythonTerminalHandle>(null);
   const [showTemplates, setShowTemplates] = useState(false);
   const [showBackendSelect, setShowBackendSelect] = useState(false);
   const [rightPanelTab, setRightPanelTab] = useState<RightPanelTab>("results");
   const [histogramMode, setHistogramMode] = useState<"counts" | "probabilities">("counts");
+  const [terminalOpen, setTerminalOpen] = useState(true);
+  const [terminalHeight, setTerminalHeight] = useState(200);
 
   // Console output log
   const [consoleLog, setConsoleLog] = useState<ConsoleEntry[]>([]);
@@ -299,6 +317,11 @@ export default function StudioPage() {
     addLog("info", `Executing circuit "${circuitName}" on ${selectedBackend}...`);
     addLog("info", `Shots: 1024`);
 
+    // Also run in the Python terminal if open
+    if (terminalRef.current && terminalOpen) {
+      terminalRef.current.runCode(code);
+    }
+
     try {
       const data = await runCircuit(code, 1024, selectedBackend);
 
@@ -348,7 +371,7 @@ export default function StudioPage() {
     } finally {
       setExecuting(false);
     }
-  }, [code, circuitName, selectedBackend, setExecuting, setResult, setError, setCircuitDiagram, addLog]);
+  }, [code, circuitName, selectedBackend, setExecuting, setResult, setError, setCircuitDiagram, addLog, terminalOpen]);
 
   const handleCopyCode = useCallback(() => {
     navigator.clipboard.writeText(code);
@@ -582,8 +605,10 @@ export default function StudioPage() {
 
       {/* Main content: Editor + Results */}
       <div className="flex flex-1 overflow-hidden">
-        {/* Editor pane */}
-        <div className="flex-1 min-w-0">
+        {/* Editor + Terminal pane */}
+        <div className="flex-1 min-w-0 flex flex-col">
+          {/* Code editor */}
+          <div className="flex-1 min-h-0">
           <MonacoEditor
             height="100%"
             language="python"
@@ -609,6 +634,50 @@ export default function StudioPage() {
               bracketPairColorization: { enabled: true },
             }}
           />
+          </div>
+
+          {/* Terminal toggle bar + terminal pane */}
+          <div
+            className="border-t border-border flex items-center px-3 py-1 bg-[#161b22] cursor-pointer select-none shrink-0"
+            onClick={() => setTerminalOpen((v) => !v)}
+          >
+            <Terminal className="h-3.5 w-3.5 text-muted-foreground mr-2" />
+            <span className="text-xs font-medium text-muted-foreground">Python Terminal</span>
+            <span className="text-[10px] text-muted-foreground/60 ml-2">Pyodide</span>
+            <div className="flex-1" />
+            {terminalOpen ? (
+              <ChevronDown className="h-3.5 w-3.5 text-muted-foreground" />
+            ) : (
+              <ChevronUp className="h-3.5 w-3.5 text-muted-foreground" />
+            )}
+          </div>
+          {terminalOpen && (
+            <div
+              style={{ height: terminalHeight }}
+              className="shrink-0 relative"
+            >
+              {/* Resize handle */}
+              <div
+                className="absolute top-0 left-0 right-0 h-1 cursor-ns-resize z-10 hover:bg-quantum/30"
+                onMouseDown={(e) => {
+                  e.preventDefault();
+                  const startY = e.clientY;
+                  const startH = terminalHeight;
+                  const onMove = (ev: MouseEvent) => {
+                    const delta = startY - ev.clientY;
+                    setTerminalHeight(Math.max(100, Math.min(500, startH + delta)));
+                  };
+                  const onUp = () => {
+                    document.removeEventListener("mousemove", onMove);
+                    document.removeEventListener("mouseup", onUp);
+                  };
+                  document.addEventListener("mousemove", onMove);
+                  document.addEventListener("mouseup", onUp);
+                }}
+              />
+              <PythonTerminal ref={terminalRef} className="h-full" />
+            </div>
+          )}
         </div>
 
         {/* Right panel with tabs: Results / Probabilities / Circuit / Stats */}
