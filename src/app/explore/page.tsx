@@ -144,6 +144,7 @@ export default function ExplorePage() {
             </div>
           </CardContent>
         </Card>
+        <a href="https://docs.thequantcloud.com/tutorials/" target="_blank" rel="noopener noreferrer">
         <Card className="hover:border-quantum/40 transition-colors cursor-pointer">
           <CardContent className="pt-6 flex items-center gap-4">
             <BookOpen className="h-8 w-8 text-quantum flex-shrink-0" />
@@ -155,7 +156,8 @@ export default function ExplorePage() {
             </div>
           </CardContent>
         </Card>
-        <a href="https://sdk.thequantai.in" target="_blank" rel="noopener noreferrer">
+        </a>
+        <a href="https://docs.thequantcloud.com/" target="_blank" rel="noopener noreferrer">
           <Card className="hover:border-quantum/40 transition-colors cursor-pointer h-full">
             <CardContent className="pt-6 flex items-center gap-4">
               <Atom className="h-8 w-8 text-quantum flex-shrink-0" />
