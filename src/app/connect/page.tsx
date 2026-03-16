@@ -83,7 +83,7 @@ export default function ConnectPage() {
       setCheckingApi(true);
       try {
         const data = await cloudHealthCheck();
-        if (!cancelled) setApiHealthy(data?.status === "healthy");
+        if (!cancelled) setApiHealthy(data?.status === "ok" || data?.status === "healthy");
       } catch {
         if (!cancelled) setApiHealthy(false);
       } finally {
@@ -251,7 +251,7 @@ export default function ConnectPage() {
                     onClick={() => {
                       setCheckingApi(true);
                       cloudHealthCheck()
-                        .then((d) => { setApiHealthy(d?.status === "healthy"); setCheckingApi(false); })
+                        .then((d) => { setApiHealthy(d?.status === "ok" || d?.status === "healthy"); setCheckingApi(false); })
                         .catch(() => { setApiHealthy(false); setCheckingApi(false); });
                     }}
                     className="gap-1"
