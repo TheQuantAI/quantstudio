@@ -84,6 +84,13 @@ export async function runCircuit(
         ["", 0] as [string, number],
       )[0];
 
+      // Generate circuit diagram client-side (cloud API doesn't return one)
+      let circuit_diagram = "";
+      try {
+        const { generateDiagramFromCode } = await import("./simulator");
+        circuit_diagram = generateDiagramFromCode(code);
+      } catch { /* diagram generation is best-effort */ }
+
       return {
         counts,
         probabilities,
@@ -92,7 +99,7 @@ export async function runCircuit(
         backend: result.backend,
         execution_time: (result.execution_time_ms ?? 0) / 1000,
         job_id: result.job_id,
-        circuit_diagram: "",
+        circuit_diagram,
         metadata: {
           num_qubits: (result.metadata?.num_qubits as number) ?? 0,
           circuit_depth: (result.metadata?.circuit_depth as number) ?? 0,

@@ -408,6 +408,19 @@ export interface SimulationResult {
   };
 }
 
+/**
+ * Generate a text-based circuit diagram from Python QuantSDK code.
+ * Used by the cloud execution path (which doesn't return a diagram from the API).
+ */
+export function generateDiagramFromCode(code: string): string {
+  try {
+    const { nQubits, ops } = parsePythonCode(code);
+    return generateCircuitDiagram(nQubits, ops);
+  } catch {
+    return "";
+  }
+}
+
 export function simulateCircuit(code: string, shots: number = 1024): SimulationResult {
   const startTime = performance.now();
 
