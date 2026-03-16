@@ -173,33 +173,34 @@ export const useBackendStore = create<BackendState>((set) => ({
   fetchBackends: async () => {
     set({ isLoading: true });
     try {
-      const API_BASE = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
-      const res = await fetch(`${API_BASE}/api/backends`);
-      if (res.ok) {
-        const data = await res.json();
-        const mapped: BackendInfo[] = data.map((b: Record<string, unknown>) => ({
-          id: b.id as string,
-          name: b.name as string,
-          provider: b.provider as string,
-          type: b.type as BackendInfo["type"],
-          qubits: b.qubits as number,
-          status: b.status as BackendInfo["status"],
-          queueDepth: (b.queue_depth as number) || 0,
-          avgFidelity: (b.avg_fidelity as number) || 1.0,
-          costPerShot: (b.cost_per_shot as number) || 0.0,
-          description: (b.description as string) || "",
-          technology: (b.technology as string) || "",
-          nativeGates: (b.native_gates as string[]) || [],
-          connectivity: (b.connectivity as string) || "",
-          maxShots: (b.max_shots as number) || 100_000,
-          avgQueueTimeSec: (b.avg_queue_time_sec as number) || 0,
-          region: (b.region as string) || "",
-          features: (b.features as string[]) || [],
-        }));
+      // Fetch from TheQuantCloud API (public endpoint, no auth required)
+      const { cloudFetchBackends } = await import("@/lib/cloud-api");
+      const cloudBackends = await cloudFetchBackends();
+      const mapped: BackendInfo[] = cloudBackends.map((b) => ({
+        id: b.name,
+        name: b.name,
+        provider: b.provider,
+        type: b.is_simulator ? "simulator" as const : "hardware" as const,
+        qubits: b.num_qubits,
+        status: (b.status === "online" ? "online" : b.status === "offline" ? "offline" : b.status === "maintenance" ? "maintenance" : "busy") as BackendInfo["status"],
+        queueDepth: b.queue_depth || 0,
+        avgFidelity: 1.0,
+        costPerShot: b.cost_per_shot || 0.0,
+        description: b.description || "",
+        technology: b.is_simulator ? "simulator" : "hardware",
+        nativeGates: b.native_gates || [],
+        connectivity: "all-to-all",
+        maxShots: 100_000,
+        avgQueueTimeSec: b.avg_queue_time_sec || 0,
+        region: "cloud",
+        features: b.is_simulator ? ["simulator", "free-tier"] : ["hardware"],
+      }));
+      if (mapped.length > 0) {
         set({ backends: mapped });
       }
     } catch {
       // Silently fall back to defaults
+      console.warn("[QuantStudio] Failed to fetch cloud backends, using defaults");
     } finally {
       set({ isLoading: false });
     }

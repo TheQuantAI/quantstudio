@@ -1,7 +1,19 @@
 // Copyright 2026 TheQuantAI
-// API client for QuantStudio backend
+// API client for QuantStudio — routes to TheQuantCloud when authenticated,
+// falls back to browser simulator for anonymous users.
 
-const API_BASE = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
+import {
+  cloudRunCircuit,
+  cloudFetchBackends,
+  cloudSaveCircuit,
+  cloudListCircuits,
+  cloudGetCircuit,
+  cloudUpdateCircuit,
+  cloudDeleteCircuit,
+  isCloudAuthenticated,
+  getAuthToken,
+  type CloudBackendInfo,
+} from "./cloud-api";
 
 export interface ExecutionResult {
   counts: Record<string, number>;
@@ -41,37 +53,94 @@ export interface CircuitResponse {
   updated_at: string;
 }
 
-/** Run a quantum circuit via the FastAPI backend, with browser simulator fallback */
+/**
+ * Run a quantum circuit.
+ *
+ * If the user is authenticated → submit to TheQuantCloud API (async job lifecycle).
+ * Otherwise → fall back to the browser-based simulator.
+ */
 export async function runCircuit(
   code: string,
   shots: number = 1024,
-  backend: string = "simulator_cpu"
+  backend: string = "simulator_cpu",
+  onStatusUpdate?: (status: string) => void,
 ): Promise<ExecutionResult> {
-  // Try the FastAPI backend first
-  try {
-    const res = await fetch(`${API_BASE}/api/run`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ code, shots, backend }),
-      signal: AbortSignal.timeout(5000), // 5s timeout
-    });
-    if (!res.ok) {
-      const body = await res.json().catch(() => null);
-      throw new Error(body?.detail || `Execution failed (HTTP ${res.status})`);
+  // If authenticated, try the cloud API
+  if (isCloudAuthenticated()) {
+    try {
+      const result = await cloudRunCircuit({
+        code,
+        shots,
+        backend: backend === "browser_sim" ? null : backend,
+        onStatusUpdate,
+      });
+
+      // Convert cloud result → ExecutionResult expected by Studio
+      const counts = result.counts;
+      const totalShots = Object.values(counts).reduce((a, b) => a + b, 0);
+      const probabilities = result.probabilities ?? {};
+      const mostLikely = Object.entries(counts).reduce(
+        (best, [state, count]) => (count > best[1] ? [state, count] : best),
+        ["", 0] as [string, number],
+      )[0];
+
+      return {
+        counts,
+        probabilities,
+        most_likely: mostLikely,
+        shots: totalShots || shots,
+        backend: result.backend,
+        execution_time: (result.execution_time_ms ?? 0) / 1000,
+        job_id: result.job_id,
+        circuit_diagram: "",
+        metadata: {
+          num_qubits: (result.metadata?.num_qubits as number) ?? 0,
+          circuit_depth: (result.metadata?.circuit_depth as number) ?? 0,
+          gate_count: (result.metadata?.gate_count as number) ?? 0,
+          simulator: result.backend,
+        },
+      };
+    } catch (err) {
+      // If cloud fails with auth error, fall back to simulator
+      if (err instanceof Error && "status" in err && (err as { status: number }).status === 401) {
+        console.warn("[QuantStudio] Cloud auth failed, falling back to browser simulator");
+      } else {
+        throw err; // Re-throw non-auth errors (quota exceeded, invalid circuit, etc.)
+      }
     }
-    return res.json();
-  } catch {
-    // Backend unreachable — fall back to browser simulator
-    const { simulateCircuit } = await import("./simulator");
-    return simulateCircuit(code, shots);
   }
+
+  // Fallback: browser simulator
+  const { simulateCircuit } = await import("./simulator");
+  return simulateCircuit(code, shots);
 }
 
-/** Fetch available backends */
+/** Map a cloud backend to the Studio BackendInfo shape */
+function mapCloudBackend(b: CloudBackendInfo): BackendInfo {
+  return {
+    id: b.name,
+    name: b.name,
+    provider: b.provider,
+    status: b.status,
+    qubits: b.num_qubits,
+    description: b.description,
+    features: b.is_simulator ? ["simulator"] : ["hardware"],
+  };
+}
+
+/**
+ * Fetch available backends from TheQuantCloud.
+ * This is a public endpoint — no auth required.
+ * Falls back to an empty array on network error.
+ */
 export async function fetchBackends(): Promise<BackendInfo[]> {
-  const res = await fetch(`${API_BASE}/api/backends`);
-  if (!res.ok) throw new Error("Failed to fetch backends");
-  return res.json();
+  try {
+    const cloudBackends = await cloudFetchBackends();
+    return cloudBackends.map(mapCloudBackend);
+  } catch {
+    console.warn("[QuantStudio] Failed to fetch cloud backends, using defaults");
+    return [];
+  }
 }
 
 // ─── localStorage helpers for circuit persistence ───────────────
@@ -91,109 +160,150 @@ function setLocalCircuits(circuits: CircuitResponse[]): void {
   localStorage.setItem(LS_KEY, JSON.stringify(circuits));
 }
 
-/** Save a circuit — tries API, falls back to localStorage */
+/**
+ * Save a circuit.
+ * If authenticated → saves to TheQuantCloud.
+ * Otherwise → saves to localStorage.
+ */
 export async function saveCircuit(
   name: string,
   code: string,
   description: string = "",
-  userId: string = "anonymous"
+  userId: string = "anonymous",
 ): Promise<CircuitResponse> {
-  try {
-    const res = await fetch(`${API_BASE}/api/circuits`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ name, code, description, user_id: userId }),
-      signal: AbortSignal.timeout(3000),
-    });
-    if (!res.ok) throw new Error("API error");
-    return res.json();
-  } catch {
-    // Fallback: save to localStorage
-    const now = new Date().toISOString();
-    const circuit: CircuitResponse = {
-      id: `local-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`,
-      name,
-      code,
-      description,
-      user_id: userId,
-      created_at: now,
-      updated_at: now,
-    };
-    const circuits = getLocalCircuits();
-    circuits.unshift(circuit);
-    setLocalCircuits(circuits);
-    return circuit;
+  if (isCloudAuthenticated()) {
+    try {
+      const saved = await cloudSaveCircuit({ name, code });
+      return {
+        id: saved.id,
+        name: saved.name,
+        code: saved.code,
+        description: "",
+        user_id: saved.user_id,
+        created_at: saved.created_at,
+        updated_at: saved.updated_at,
+      };
+    } catch {
+      // Fall through to localStorage
+    }
   }
+
+  const now = new Date().toISOString();
+  const circuit: CircuitResponse = {
+    id: `local-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`,
+    name,
+    code,
+    description,
+    user_id: userId,
+    created_at: now,
+    updated_at: now,
+  };
+  const circuits = getLocalCircuits();
+  circuits.unshift(circuit);
+  setLocalCircuits(circuits);
+  return circuit;
 }
 
-/** List saved circuits — tries API, falls back to localStorage */
+/**
+ * List saved circuits.
+ * If authenticated → fetches from TheQuantCloud.
+ * Falls back to localStorage.
+ */
 export async function listCircuits(userId?: string): Promise<CircuitResponse[]> {
-  try {
-    const url = userId
-      ? `${API_BASE}/api/circuits?user_id=${encodeURIComponent(userId)}`
-      : `${API_BASE}/api/circuits`;
-    const res = await fetch(url, { signal: AbortSignal.timeout(3000) });
-    if (!res.ok) throw new Error("API error");
-    return res.json();
-  } catch {
-    const all = getLocalCircuits();
-    return userId ? all.filter((c) => c.user_id === userId) : all;
+  if (isCloudAuthenticated()) {
+    try {
+      const cloudCircuits = await cloudListCircuits();
+      return cloudCircuits.map((c) => ({
+        id: c.id,
+        name: c.name,
+        code: c.code,
+        description: "",
+        user_id: c.user_id,
+        created_at: c.created_at,
+        updated_at: c.updated_at,
+      }));
+    } catch {
+      // Fall through to localStorage
+    }
   }
+
+  const all = getLocalCircuits();
+  return userId ? all.filter((c) => c.user_id === userId) : all;
 }
 
-/** Load a circuit by ID — tries API, falls back to localStorage */
+/** Load a circuit by ID */
 export async function getCircuit(id: string): Promise<CircuitResponse> {
-  try {
-    const res = await fetch(`${API_BASE}/api/circuits/${id}`, {
-      signal: AbortSignal.timeout(3000),
-    });
-    if (!res.ok) throw new Error("API error");
-    return res.json();
-  } catch {
-    const circuit = getLocalCircuits().find((c) => c.id === id);
-    if (!circuit) throw new Error("Circuit not found");
-    return circuit;
+  // Cloud circuits have UUID format (not "local-...")
+  if (isCloudAuthenticated() && !id.startsWith("local-")) {
+    try {
+      const c = await cloudGetCircuit(id);
+      return {
+        id: c.id,
+        name: c.name,
+        code: c.code,
+        description: "",
+        user_id: c.user_id,
+        created_at: c.created_at,
+        updated_at: c.updated_at,
+      };
+    } catch {
+      // Fall through to localStorage
+    }
   }
+
+  const circuit = getLocalCircuits().find((c) => c.id === id);
+  if (!circuit) throw new Error("Circuit not found");
+  return circuit;
 }
 
-/** Update an existing circuit — tries API, falls back to localStorage */
+/** Update an existing circuit */
 export async function updateCircuit(
   id: string,
-  updates: { name?: string; code?: string; description?: string }
+  updates: { name?: string; code?: string; description?: string },
 ): Promise<CircuitResponse> {
-  try {
-    const res = await fetch(`${API_BASE}/api/circuits/${id}`, {
-      method: "PUT",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(updates),
-      signal: AbortSignal.timeout(3000),
-    });
-    if (!res.ok) throw new Error("API error");
-    return res.json();
-  } catch {
-    const circuits = getLocalCircuits();
-    const idx = circuits.findIndex((c) => c.id === id);
-    if (idx === -1) throw new Error("Circuit not found");
-    circuits[idx] = {
-      ...circuits[idx],
-      ...updates,
-      updated_at: new Date().toISOString(),
-    };
-    setLocalCircuits(circuits);
-    return circuits[idx];
+  if (isCloudAuthenticated() && !id.startsWith("local-")) {
+    try {
+      const c = await cloudUpdateCircuit(id, updates);
+      return {
+        id: c.id,
+        name: c.name,
+        code: c.code,
+        description: "",
+        user_id: c.user_id,
+        created_at: c.created_at,
+        updated_at: c.updated_at,
+      };
+    } catch {
+      // Fall through to localStorage
+    }
   }
+
+  const circuits = getLocalCircuits();
+  const idx = circuits.findIndex((c) => c.id === id);
+  if (idx === -1) throw new Error("Circuit not found");
+  circuits[idx] = {
+    ...circuits[idx],
+    ...updates,
+    updated_at: new Date().toISOString(),
+  };
+  setLocalCircuits(circuits);
+  return circuits[idx];
 }
 
-/** Delete a circuit — tries API, falls back to localStorage */
+/** Delete a circuit */
 export async function deleteCircuit(id: string): Promise<void> {
-  try {
-    const res = await fetch(`${API_BASE}/api/circuits/${id}`, {
-      method: "DELETE",
-      signal: AbortSignal.timeout(3000),
-    });
-    if (!res.ok) throw new Error("API error");
-  } catch {
-    const circuits = getLocalCircuits().filter((c) => c.id !== id);
-    setLocalCircuits(circuits);
+  if (isCloudAuthenticated() && !id.startsWith("local-")) {
+    try {
+      await cloudDeleteCircuit(id);
+      return;
+    } catch {
+      // Fall through to localStorage
+    }
   }
+
+  const circuits = getLocalCircuits().filter((c) => c.id !== id);
+  setLocalCircuits(circuits);
 }
+
+// Re-export for convenience
+export { isCloudAuthenticated, getAuthToken } from "./cloud-api";
