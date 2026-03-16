@@ -13,6 +13,7 @@ import {
   Server,
   CreditCard,
   LayoutDashboard,
+  Cloud,
   Sun,
   Moon,
   Github,
@@ -26,6 +27,7 @@ const NAV_ITEMS = [
   { href: "/explore", label: "Explore", icon: Compass },
   { href: "/backends", label: "Backends", icon: Server },
   { href: "/pricing", label: "Pricing", icon: CreditCard },
+  { href: "/connect", label: "Connect", icon: Cloud },
   { href: "/dashboard", label: "Dashboard", icon: LayoutDashboard },
 ];
 
