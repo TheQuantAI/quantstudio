@@ -94,25 +94,46 @@ export default function ConnectPage() {
   }, []);
 
   // ─── Load existing API keys once authenticated ─────────────────
-  useEffect(() => {
+  const fetchExistingKeys = useCallback(async () => {
     if (!session) return;
+    setLoadingKeys(true);
+    try {
+      const token = await getAccessToken();
+      const res = await fetch(`${CLOUD_API_URL}/v1/auth/api-keys`, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      if (res.ok) {
+        const data = await res.json();
+        // API returns a flat array of key objects
+        const keys = Array.isArray(data) ? data : (data.api_keys || []);
+        setExistingKeys(keys);
+      }
+    } catch { /* ignore */ }
+    finally { setLoadingKeys(false); }
+  }, [session, getAccessToken]);
+
+  useEffect(() => {
+    fetchExistingKeys();
+  }, [fetchExistingKeys]);
+
+  // ─── Auto-verify connection when user has existing keys ────────
+  useEffect(() => {
+    if (!session || existingKeys.length === 0 || verified) return;
     let cancelled = false;
     (async () => {
-      setLoadingKeys(true);
       try {
         const token = await getAccessToken();
-        const res = await fetch(`${CLOUD_API_URL}/v1/auth/api-keys`, {
+        const res = await fetch(`${CLOUD_API_URL}/v1/account/usage`, {
           headers: { Authorization: `Bearer ${token}` },
         });
         if (res.ok) {
           const data = await res.json();
-          if (!cancelled) setExistingKeys(data.api_keys || []);
+          if (!cancelled && data.tier) setVerified(true);
         }
       } catch { /* ignore */ }
-      finally { if (!cancelled) setLoadingKeys(false); }
     })();
     return () => { cancelled = true; };
-  }, [session, getAccessToken]);
+  }, [session, existingKeys, verified, getAccessToken]);
 
   // ─── Generate API key ──────────────────────────────────────────
   const handleGenerateKey = useCallback(async () => {
@@ -134,12 +155,14 @@ export default function ConnectPage() {
       }
       const data = await res.json();
       setApiKey(data.key);
+      // Refresh the existing keys list so the new key appears on next reload
+      fetchExistingKeys();
     } catch (err) {
       setVerifyError(err instanceof Error ? err.message : "Failed to generate key");
     } finally {
       setGeneratingKey(false);
     }
-  }, [getAccessToken, apiKeyName]);
+  }, [getAccessToken, apiKeyName, fetchExistingKeys]);
 
   // ─── Copy API key ──────────────────────────────────────────────
   const handleCopyKey = useCallback(async () => {
