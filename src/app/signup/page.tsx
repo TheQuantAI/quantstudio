@@ -35,7 +35,7 @@ export default function SignupPage() {
     setIsLoading(true);
     setError(null);
 
-    const { error: authError } = await supabase.auth.signUp({
+    const { data, error: authError } = await supabase.auth.signUp({
       email,
       password,
       options: {
@@ -48,8 +48,14 @@ export default function SignupPage() {
 
     if (authError) {
       setError(authError.message);
+    } else if (data?.user?.identities?.length === 0) {
+      // User already exists with this email
+      setError("An account with this email already exists. Please sign in instead.");
+    } else if (data?.session) {
+      // Auto-confirmed (mailer_autoconfirm enabled) — redirect immediately
+      router.push("/studio");
     } else {
-      // Supabase sends a confirmation email; show success
+      // Confirmation email sent; show success screen
       setEmailSent(true);
     }
   };
@@ -114,15 +120,18 @@ export default function SignupPage() {
             </div>
           )}
 
-          {/* GitHub OAuth */}
+          {/* GitHub OAuth — recommended for instant access */}
           <Button
-            variant="outline"
+            variant="quantum"
             className="w-full gap-2"
             onClick={handleGitHubSignup}
             disabled={isLoading}
           >
             <Github className="h-4 w-4" />
             Sign up with GitHub
+            <span className="ml-1 text-[10px] font-normal opacity-80">
+              (Recommended)
+            </span>
           </Button>
 
           <div className="relative">
@@ -181,7 +190,7 @@ export default function SignupPage() {
             </div>
             <Button
               type="submit"
-              variant="quantum"
+              variant="outline"
               className="w-full gap-2"
               disabled={isLoading}
             >

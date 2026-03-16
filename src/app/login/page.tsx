@@ -81,9 +81,9 @@ function LoginForm() {
             </div>
           )}
 
-          {/* GitHub OAuth */}
+          {/* GitHub OAuth — recommended */}
           <Button
-            variant="outline"
+            variant="quantum"
             className="w-full gap-2"
             onClick={handleGitHubLogin}
             disabled={isLoading}
@@ -140,7 +140,7 @@ function LoginForm() {
             </div>
             <Button
               type="submit"
-              variant="quantum"
+              variant="outline"
               className="w-full gap-2"
               disabled={isLoading}
             >
