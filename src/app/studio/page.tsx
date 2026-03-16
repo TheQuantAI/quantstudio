@@ -34,7 +34,7 @@ import {
   Info,
 } from "lucide-react";
 import { useCallback, useRef, useState, useEffect } from "react";
-import { useSession } from "next-auth/react";
+import { useAuth } from "@/components/auth-provider";
 import { runCircuit, saveCircuit, updateCircuit, listCircuits, deleteCircuit, type CircuitResponse } from "@/lib/api";
 
 // Dynamically import Monaco to avoid SSR issues
@@ -98,7 +98,7 @@ export default function StudioPage() {
   } = useCircuitStore();
 
   const { backends } = useBackendStore();
-  const { data: session } = useSession();
+  const { user } = useAuth();
   const editorRef = useRef<unknown>(null);
   const terminalRef = useRef<PythonTerminalHandle>(null);
   const [showTemplates, setShowTemplates] = useState(false);
@@ -136,7 +136,7 @@ export default function StudioPage() {
   const [saveSuccess, setSaveSuccess] = useState(false);
   const [loadingCircuits, setLoadingCircuits] = useState(false);
 
-  const userId = session?.user?.id || "anonymous";
+  const userId = user?.id || "anonymous";
   const currentBackend = backends.find((b) => b.id === selectedBackend);
 
   // Load user's circuits when My Circuits dropdown opens
@@ -531,7 +531,7 @@ export default function StudioPage() {
               <div className="px-3 py-2 border-b border-border">
                 <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide">
                   Saved Circuits
-                  {session?.user ? "" : " (sign in to persist)"}
+                  {user ? "" : " (sign in to persist)"}
                 </p>
               </div>
               {loadingCircuits ? (

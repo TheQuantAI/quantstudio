@@ -2,7 +2,8 @@
 
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { signIn } from "next-auth/react";
+import { supabase } from "@/lib/supabase";
+import { useAuth } from "@/components/auth-provider";
 import { Button } from "@/components/ui/button";
 import {
   Card,
@@ -11,46 +12,89 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
-import { Atom, Github, Mail, Loader2 } from "lucide-react";
-import { useState } from "react";
+import { Atom, Github, Mail, Loader2, CheckCircle2 } from "lucide-react";
+import { useState, useEffect } from "react";
 
 export default function SignupPage() {
   const router = useRouter();
+  const { user } = useAuth();
   const [name, setName] = useState("");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [emailSent, setEmailSent] = useState(false);
+
+  // Redirect if already authenticated
+  useEffect(() => {
+    if (user) router.push("/studio");
+  }, [user, router]);
 
   const handleSignup = async (e: React.FormEvent) => {
     e.preventDefault();
     setIsLoading(true);
     setError(null);
 
-    try {
-      // In v0.1 the Credentials provider auto-registers new users
-      const result = await signIn("credentials", {
-        email,
-        password,
-        redirect: false,
-      });
+    const { error: authError } = await supabase.auth.signUp({
+      email,
+      password,
+      options: {
+        data: { full_name: name },
+        emailRedirectTo: `${window.location.origin}/studio`,
+      },
+    });
 
-      if (result?.error) {
-        setError("Registration failed. Please try again.");
-      } else {
-        router.push("/studio");
-        router.refresh();
-      }
-    } catch {
-      setError("Something went wrong. Please try again.");
-    } finally {
-      setIsLoading(false);
+    setIsLoading(false);
+
+    if (authError) {
+      setError(authError.message);
+    } else {
+      // Supabase sends a confirmation email; show success
+      setEmailSent(true);
     }
   };
 
-  const handleGitHubSignup = () => {
-    signIn("github", { callbackUrl: "/studio" });
+  const handleGitHubSignup = async () => {
+    const { error: authError } = await supabase.auth.signInWithOAuth({
+      provider: "github",
+      options: {
+        redirectTo: `${window.location.origin}/studio`,
+      },
+    });
+    if (authError) setError(authError.message);
   };
+
+  if (emailSent) {
+    return (
+      <div className="flex items-center justify-center min-h-[calc(100vh-3.5rem)] px-4">
+        <Card className="w-full max-w-md">
+          <CardHeader className="text-center">
+            <CheckCircle2 className="h-12 w-12 mx-auto text-green-500 mb-2" />
+            <CardTitle className="text-2xl">Check Your Email</CardTitle>
+            <CardDescription>
+              We sent a confirmation link to <strong>{email}</strong>.
+              Click the link to activate your account and start building
+              quantum circuits.
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="text-center">
+            <p className="text-sm text-muted-foreground mb-4">
+              Didn&apos;t receive it? Check your spam folder or{" "}
+              <button
+                onClick={() => setEmailSent(false)}
+                className="text-quantum hover:underline"
+              >
+                try again
+              </button>.
+            </p>
+            <Link href="/login">
+              <Button variant="outline">Back to Sign In</Button>
+            </Link>
+          </CardContent>
+        </Card>
+      </div>
+    );
+  }
 
   return (
     <div className="flex items-center justify-center min-h-[calc(100vh-3.5rem)] px-4">
@@ -60,7 +104,7 @@ export default function SignupPage() {
           <CardTitle className="text-2xl">Create Your Account</CardTitle>
           <CardDescription>
             Get started with QuantStudio — free tier includes 60 min simulator
-            time and 10 QPU tasks/month
+            time, $50 credits, and 10 QPU tasks/month
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-4">

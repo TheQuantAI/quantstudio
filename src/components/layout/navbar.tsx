@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useTheme } from "next-themes";
-import { useSession, signOut } from "next-auth/react";
+import { useAuth } from "@/components/auth-provider";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import {
@@ -32,7 +32,7 @@ const NAV_ITEMS = [
 export function Navbar() {
   const pathname = usePathname();
   const { theme, setTheme } = useTheme();
-  const { data: session, status } = useSession();
+  const { user, isLoading, signOut } = useAuth();
   const [showUserMenu, setShowUserMenu] = useState(false);
   const menuRef = useRef<HTMLDivElement>(null);
 
@@ -104,19 +104,19 @@ export function Navbar() {
             <Moon className="absolute h-4 w-4 rotate-90 scale-0 transition-all dark:rotate-0 dark:scale-100" />
           </Button>
 
-          {status === "loading" ? (
+          {isLoading ? (
             <div className="h-8 w-20 rounded-md bg-muted animate-pulse" />
-          ) : session?.user ? (
+          ) : user ? (
             /* Logged-in state: avatar + dropdown */
             <div className="relative" ref={menuRef}>
               <button
                 onClick={() => setShowUserMenu(!showUserMenu)}
                 className="flex items-center gap-2 rounded-full border border-border px-2 py-1 hover:bg-accent transition-colors"
               >
-                {session.user.image ? (
+                {user.image ? (
                   <img
-                    src={session.user.image}
-                    alt={session.user.name || "User"}
+                    src={user.image}
+                    alt={user.name || "User"}
                     className="h-6 w-6 rounded-full"
                   />
                 ) : (
@@ -125,16 +125,16 @@ export function Navbar() {
                   </div>
                 )}
                 <span className="text-sm font-medium hidden md:inline max-w-[120px] truncate">
-                  {session.user.name || session.user.email?.split("@")[0]}
+                  {user.name || user.email?.split("@")[0]}
                 </span>
               </button>
 
               {showUserMenu && (
                 <div className="absolute right-0 top-full mt-1 w-56 bg-card border border-border rounded-lg shadow-lg z-50 py-1">
                   <div className="px-3 py-2 border-b border-border">
-                    <p className="text-sm font-medium">{session.user.name}</p>
+                    <p className="text-sm font-medium">{user.name}</p>
                     <p className="text-xs text-muted-foreground truncate">
-                      {session.user.email}
+                      {user.email}
                     </p>
                   </div>
                   <Link
@@ -146,7 +146,7 @@ export function Navbar() {
                     Dashboard
                   </Link>
                   <button
-                    onClick={() => signOut({ callbackUrl: "/" })}
+                    onClick={() => { signOut(); setShowUserMenu(false); }}
                     className="flex items-center gap-2 w-full px-3 py-2 text-sm text-destructive hover:bg-accent transition-colors"
                   >
                     <LogOut className="h-4 w-4" />

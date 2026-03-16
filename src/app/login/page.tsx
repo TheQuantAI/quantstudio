@@ -2,7 +2,8 @@
 
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
-import { signIn } from "next-auth/react";
+import { supabase } from "@/lib/supabase";
+import { useAuth } from "@/components/auth-provider";
 import { Button } from "@/components/ui/button";
 import {
   Card,
@@ -12,48 +13,55 @@ import {
   CardTitle,
 } from "@/components/ui/card";
 import { Atom, Github, Mail, Loader2 } from "lucide-react";
-import { useState, Suspense } from "react";
+import { useState, useEffect, Suspense } from "react";
 
 function LoginForm() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const callbackUrl = searchParams.get("callbackUrl") || "/studio";
-  const authError = searchParams.get("error");
+  const { user } = useAuth();
 
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [isLoading, setIsLoading] = useState(false);
-  const [error, setError] = useState<string | null>(
-    authError === "CredentialsSignin" ? "Invalid email or password" : null
-  );
+  const [error, setError] = useState<string | null>(null);
 
-  const handleCredentialsLogin = async (e: React.FormEvent) => {
+  // Redirect if already authenticated
+  useEffect(() => {
+    if (user) {
+      router.push(callbackUrl);
+    }
+  }, [user, router, callbackUrl]);
+
+  const handleEmailLogin = async (e: React.FormEvent) => {
     e.preventDefault();
     setIsLoading(true);
     setError(null);
 
-    try {
-      const result = await signIn("credentials", {
-        email,
-        password,
-        redirect: false,
-      });
+    const { error: authError } = await supabase.auth.signInWithPassword({
+      email,
+      password,
+    });
 
-      if (result?.error) {
-        setError("Invalid email or password. Try demo@thequantcloud.com / quantum123");
-      } else {
-        router.push(callbackUrl);
-        router.refresh();
-      }
-    } catch {
-      setError("Something went wrong. Please try again.");
-    } finally {
+    if (authError) {
+      setError(authError.message);
       setIsLoading(false);
+    } else {
+      router.push(callbackUrl);
+      router.refresh();
     }
   };
 
-  const handleGitHubLogin = () => {
-    signIn("github", { callbackUrl });
+  const handleGitHubLogin = async () => {
+    const { error: authError } = await supabase.auth.signInWithOAuth({
+      provider: "github",
+      options: {
+        redirectTo: `${window.location.origin}${callbackUrl}`,
+      },
+    });
+    if (authError) {
+      setError(authError.message);
+    }
   };
 
   return (
@@ -94,7 +102,7 @@ function LoginForm() {
           </div>
 
           {/* Email form */}
-          <form onSubmit={handleCredentialsLogin} className="space-y-3">
+          <form onSubmit={handleEmailLogin} className="space-y-3">
             <div>
               <label
                 htmlFor="email"
@@ -144,10 +152,6 @@ function LoginForm() {
               {isLoading ? "Signing in..." : "Sign In"}
             </Button>
           </form>
-
-          <div className="rounded-md bg-muted/50 px-3 py-2 text-xs text-muted-foreground">
-            <strong>Demo account:</strong> demo@thequantcloud.com / quantum123
-          </div>
 
           <p className="text-center text-sm text-muted-foreground">
             Don&apos;t have an account?{" "}
