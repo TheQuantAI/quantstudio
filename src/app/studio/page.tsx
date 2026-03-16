@@ -97,8 +97,13 @@ export default function StudioPage() {
     loadTemplate,
   } = useCircuitStore();
 
-  const { backends } = useBackendStore();
+  const { backends, fetchBackends } = useBackendStore();
   const { user } = useAuth();
+
+  // Fetch backends from the cloud API on mount
+  useEffect(() => {
+    fetchBackends();
+  }, [fetchBackends]);
   const editorRef = useRef<unknown>(null);
   const terminalRef = useRef<PythonTerminalHandle>(null);
   const [showTemplates, setShowTemplates] = useState(false);

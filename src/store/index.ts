@@ -105,7 +105,7 @@ export const useCircuitStore = create<CircuitState>((set) => ({
   isExecuting: false,
   result: null,
   error: null,
-  selectedBackend: "simulator_cpu",
+  selectedBackend: "local_simulator",
 
   // Visualization
   circuitDiagram: null,
@@ -157,11 +157,32 @@ interface BackendState {
 // The full enriched data comes from GET /api/backends.
 export const DEFAULT_BACKENDS: BackendInfo[] = [
   {
-    id: "simulator_cpu", name: "CPU Simulator", provider: "TheQuantCloud",
+    id: "local_simulator", name: "Local Simulator", provider: "TheQuantCloud",
+    type: "simulator", qubits: 20, status: "online", queueDepth: 0,
+    avgFidelity: 1.0, costPerShot: 0.0, description: "Pure NumPy statevector simulator (QuantSDK built-in). Up to 20 qubits.",
+    technology: "simulator", nativeGates: ["h","x","y","z","cx","cz","rx","ry","rz","swap","ccx"], connectivity: "all-to-all",
+    maxShots: 1_000_000, avgQueueTimeSec: 0, region: "cloud", features: ["simulator", "free-tier"],
+  },
+  {
+    id: "aer_simulator", name: "Aer Simulator", provider: "TheQuantCloud",
     type: "simulator", qubits: 25, status: "online", queueDepth: 0,
-    avgFidelity: 1.0, costPerShot: 0.0, description: "Local CPU statevector simulator.",
-    technology: "cpu", nativeGates: [], connectivity: "all-to-all",
-    maxShots: 1_000_000, avgQueueTimeSec: 0, region: "local", features: ["free-tier"],
+    avgFidelity: 1.0, costPerShot: 0.0, description: "Qiskit Aer statevector/QASM simulator. Up to 25 qubits.",
+    technology: "simulator", nativeGates: ["h","x","y","z","cx","cz","rx","ry","rz","swap","ccx"], connectivity: "all-to-all",
+    maxShots: 1_000_000, avgQueueTimeSec: 0, region: "cloud", features: ["simulator", "free-tier"],
+  },
+  {
+    id: "cirq_simulator", name: "Cirq Simulator", provider: "TheQuantCloud",
+    type: "simulator", qubits: 20, status: "online", queueDepth: 0,
+    avgFidelity: 1.0, costPerShot: 0.0, description: "Google Cirq DensityMatrix simulator. Up to 20 qubits.",
+    technology: "simulator", nativeGates: ["h","x","y","z","cx","cz","rx","ry","rz","swap","ccx"], connectivity: "all-to-all",
+    maxShots: 1_000_000, avgQueueTimeSec: 0, region: "cloud", features: ["simulator", "free-tier"],
+  },
+  {
+    id: "pennylane_simulator", name: "PennyLane Simulator", provider: "TheQuantCloud",
+    type: "simulator", qubits: 20, status: "online", queueDepth: 0,
+    avgFidelity: 1.0, costPerShot: 0.0, description: "PennyLane default.qubit simulator. Up to 20 qubits.",
+    technology: "simulator", nativeGates: ["h","x","y","z","cx","cz","rx","ry","rz","swap","ccx"], connectivity: "all-to-all",
+    maxShots: 1_000_000, avgQueueTimeSec: 0, region: "cloud", features: ["simulator", "free-tier"],
   },
 ];
 

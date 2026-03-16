@@ -62,7 +62,7 @@ export interface CircuitResponse {
 export async function runCircuit(
   code: string,
   shots: number = 1024,
-  backend: string = "simulator_cpu",
+  backend: string = "local_simulator",
   onStatusUpdate?: (status: string) => void,
 ): Promise<ExecutionResult> {
   // If authenticated, try the cloud API
