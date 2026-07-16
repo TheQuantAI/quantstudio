@@ -245,6 +245,7 @@ export async function cloudGetJobResult(
  */
 export async function cloudRunCircuit(params: {
   code: string;
+  circuit_qasm?: string;
   shots?: number;
   backend?: string | null;
   optimize_for?: string;
