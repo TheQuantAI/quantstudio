@@ -50,6 +50,11 @@ def _rz(theta):
     c, s = math.cos(theta/2), math.sin(theta/2)
     return [[(c, -s), (0, 0)], [(0, 0), (c, s)]]
 
+def _pmat(theta):
+    # Phase gate p(θ) = diag(1, e^{iθ}). Applied under control this is a
+    # genuine controlled-phase (cp) — distinct from crz (API-014 / B1).
+    return [[(1, 0), (0, 0)], [(0, 0), (math.cos(theta), math.sin(theta))]]
+
 
 # ─── State-vector simulation core ────────────────────────────────
 
@@ -253,7 +258,7 @@ class Circuit:
     def rx(self, q, theta): self._ops.append(("single", "rx", q, theta)); self._track([q])
     def ry(self, q, theta): self._ops.append(("single", "ry", q, theta)); self._track([q])
     def rz(self, q, theta): self._ops.append(("single", "rz", q, theta)); self._track([q])
-    def p(self, q, theta):  self._ops.append(("single", "rz", q, theta)); self._track([q])
+    def p(self, q, theta):  self._ops.append(("single", "p", q, theta)); self._track([q])
     def phase(self, q, theta): self.p(q, theta)
     def u1(self, q, theta): self.p(q, theta)
 
@@ -263,7 +268,7 @@ class Circuit:
     def cz(self, ctrl, tgt):  self._ops.append(("controlled", "z", ctrl, tgt)); self._track([ctrl, tgt])
     def cy(self, ctrl, tgt):  self._ops.append(("controlled", "y", ctrl, tgt)); self._track([ctrl, tgt])
     def ch(self, ctrl, tgt):  self._ops.append(("controlled", "h", ctrl, tgt)); self._track([ctrl, tgt])
-    def cp(self, ctrl, tgt, theta): self._ops.append(("controlled", "rz", ctrl, tgt, theta)); self._track([ctrl, tgt])
+    def cp(self, ctrl, tgt, theta): self._ops.append(("controlled", "p", ctrl, tgt, theta)); self._track([ctrl, tgt])
     def crx(self, ctrl, tgt, theta): self._ops.append(("controlled", "rx", ctrl, tgt, theta)); self._track([ctrl, tgt])
     def cry(self, ctrl, tgt, theta): self._ops.append(("controlled", "ry", ctrl, tgt, theta)); self._track([ctrl, tgt])
     def crz(self, ctrl, tgt, theta): self._ops.append(("controlled", "rz", ctrl, tgt, theta)); self._track([ctrl, tgt])
@@ -292,6 +297,73 @@ class Circuit:
     def gate_count(self):
         return self._gate_count
 
+    def to_openqasm(self):
+        """Serialize to OpenQASM 2.0 (API-014).
+
+        The gate names emitted here are a strict subset of what the server's
+        ``from_openqasm`` parser accepts, so Studio can submit real circuits
+        for cloud execution instead of raw Python. A CI round-trip test over
+        every template guards this pairing against drift.
+
+        Note: the browser stub collapses measurement to "measure everything"
+        (it does not track per-qubit measurement), so a ``measure`` op emits
+        ``measure q[i]->c[i]`` for all qubits. Partial measurement is a known
+        beta limitation.
+        """
+        n = self.n_qubits
+        lines = ["OPENQASM 2.0;", 'include "qelib1.inc";', "", "qreg q[%d];" % n]
+
+        has_measure = any(op[0] == "measure" for op in self._ops)
+        if has_measure:
+            lines.append("creg c[%d];" % n)
+        lines.append("")
+
+        # single-qubit gate names that map 1:1 to QASM (no params)
+        _single_fixed = {"h", "x", "y", "z", "s", "t", "sdg", "tdg", "sx"}
+        # gate name -> QASM name (params). "p" is the phase gate, distinct
+        # from "rz" — a controlled "p" must emit cp, never crz (B1).
+        _single_param = {"rx": "rx", "ry": "ry", "rz": "rz", "p": "p"}
+        _ctrl_fixed = {"x": "cx", "z": "cz", "y": "cy", "h": "ch"}
+        _ctrl_param = {"rx": "crx", "ry": "cry", "rz": "crz", "p": "cp"}
+
+        measured = False
+        for op in self._ops:
+            kind = op[0]
+            if kind == "single":
+                name = op[1]
+                q = op[2]
+                if name in _single_fixed:
+                    lines.append("%s q[%d];" % (name, q))
+                elif name in _single_param:
+                    lines.append("%s(%r) q[%d];" % (_single_param[name], float(op[3]), q))
+                else:
+                    raise ValueError("Cannot serialize gate to OpenQASM: %s" % name)
+            elif kind == "controlled":
+                name = op[1]
+                ctrl, tgt = op[2], op[3]
+                if name in _ctrl_fixed:
+                    lines.append("%s q[%d],q[%d];" % (_ctrl_fixed[name], ctrl, tgt))
+                elif name in _ctrl_param:
+                    lines.append("%s(%r) q[%d],q[%d];" % (_ctrl_param[name], float(op[4]), ctrl, tgt))
+                else:
+                    raise ValueError("Cannot serialize controlled gate to OpenQASM: %s" % name)
+            elif kind == "swap":
+                lines.append("swap q[%d],q[%d];" % (op[1], op[2]))
+            elif kind == "ccx":
+                lines.append("ccx q[%d],q[%d],q[%d];" % (op[1], op[2], op[3]))
+            elif kind == "barrier":
+                lines.append("barrier %s;" % ",".join("q[%d]" % i for i in range(n)))
+            elif kind == "measure":
+                if not measured:  # emit the full measure block once
+                    for i in range(n):
+                        lines.append("measure q[%d] -> c[%d];" % (i, i))
+                    measured = True
+            else:
+                raise ValueError("Cannot serialize operation to OpenQASM: %s" % kind)
+
+        lines.append("")
+        return "\n".join(lines)
+
     def __repr__(self):
         return f"Circuit(n_qubits={self.n_qubits}, name='{self.name}', gates={self._gate_count}, depth={self.depth})"
 
@@ -314,8 +386,8 @@ def run(circuit, shots=1024, backend="simulator"):
             gate = op[1]
             qubit = op[2]
             theta = op[3] if len(op) > 3 else None
-            if gate in ("rx", "ry", "rz") and theta is not None:
-                mat = {"rx": _rx, "ry": _ry, "rz": _rz}[gate](theta)
+            if gate in ("rx", "ry", "rz", "p") and theta is not None:
+                mat = {"rx": _rx, "ry": _ry, "rz": _rz, "p": _pmat}[gate](theta)
             elif gate in GATES:
                 mat = GATES[gate]
             else:
@@ -325,8 +397,8 @@ def run(circuit, shots=1024, backend="simulator"):
             gate = op[1]
             ctrl, tgt = op[2], op[3]
             theta = op[4] if len(op) > 4 else None
-            if gate in ("rx", "ry", "rz") and theta is not None:
-                mat = {"rx": _rx, "ry": _ry, "rz": _rz}[gate](theta)
+            if gate in ("rx", "ry", "rz", "p") and theta is not None:
+                mat = {"rx": _rx, "ry": _ry, "rz": _rz, "p": _pmat}[gate](theta)
             elif gate in GATES:
                 mat = GATES[gate]
             else:

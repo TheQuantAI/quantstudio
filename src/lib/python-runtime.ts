@@ -108,6 +108,39 @@ export async function executePython(
 }
 
 /**
+ * Build OpenQASM 2.0 from QuantSDK Python by running it in Pyodide and
+ * serializing the resulting circuit (API-014). Studio submits this QASM to
+ * the cloud so the server executes the *actual* circuit the user wrote —
+ * not a fabricated fallback. Throws a clear error if no circuit is defined
+ * or a gate cannot be serialized (so we never submit malformed QASM).
+ */
+export async function generateQasmFromCode(
+  code: string
+): Promise<{ qasm: string; num_qubits: number }> {
+  const pyodide = await loadPyodide();
+
+  // Silence output — the user's code may print; we only want the circuit.
+  pyodide.setStdout({ batched: () => {} });
+  pyodide.setStderr({ batched: () => {} });
+  pyodide.globals.set("_qs_user_code", code);
+
+  const driver = `
+import json as _json
+_ns = {}
+exec(_qs_user_code, _ns)
+import quantsdk as _qs
+_circuits = [v for v in _ns.values() if isinstance(v, _qs.Circuit)]
+if not _circuits:
+    raise ValueError("No circuit found — define a qs.Circuit(...) to run on the cloud.")
+_c = _circuits[-1]
+_json.dumps({"qasm": _c.to_openqasm(), "num_qubits": _c.n_qubits})
+`;
+
+  const raw = (await pyodide.runPythonAsync(driver)) as string;
+  return JSON.parse(raw) as { qasm: string; num_qubits: number };
+}
+
+/**
  * Execute a single REPL expression/statement.
  * For interactive mode — handles expression evaluation (shows result)
  * and statements (executes silently unless they print).

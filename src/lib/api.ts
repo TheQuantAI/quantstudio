@@ -68,8 +68,25 @@ export async function runCircuit(
   // If authenticated, try the cloud API
   if (isCloudAuthenticated()) {
     try {
+      // Compile the user's Python to OpenQASM in-browser so the server runs
+      // the real circuit (API-014). A failure here is surfaced, not hidden —
+      // we never fall back to submitting raw Python.
+      let circuit_qasm: string | undefined;
+      let num_qubits: number | undefined;
+      try {
+        const { generateQasmFromCode } = await import("./python-runtime");
+        const compiled = await generateQasmFromCode(code);
+        circuit_qasm = compiled.qasm;
+        num_qubits = compiled.num_qubits;
+      } catch (qerr) {
+        const detail = qerr instanceof Error ? qerr.message : String(qerr);
+        throw new Error(`Could not prepare circuit for cloud execution: ${detail}`);
+      }
+
       const result = await cloudRunCircuit({
         code,
+        circuit_qasm,
+        num_qubits,
         shots,
         backend: backend === "browser_sim" ? null : backend,
         onStatusUpdate,
