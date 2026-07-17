@@ -6,6 +6,7 @@ import { AuthProvider } from "@/components/auth-provider";
 import { ConsentProvider } from "@/components/consent-provider";
 import { ConsentBanner } from "@/components/consent-banner";
 import { GatedAnalytics } from "@/components/gated-analytics";
+import { AnalyticsProvider } from "@/components/analytics-provider";
 import { useState } from "react";
 
 export function Providers({ children }: { children: React.ReactNode }) {
@@ -24,13 +25,15 @@ export function Providers({ children }: { children: React.ReactNode }) {
   return (
     <ConsentProvider>
       <AuthProvider>
-        <ThemeProvider attribute="class" defaultTheme="dark" enableSystem>
-          <QueryClientProvider client={queryClient}>
-            {children}
-            <ConsentBanner />
-            <GatedAnalytics />
-          </QueryClientProvider>
-        </ThemeProvider>
+        <AnalyticsProvider>
+          <ThemeProvider attribute="class" defaultTheme="dark" enableSystem>
+            <QueryClientProvider client={queryClient}>
+              {children}
+              <ConsentBanner />
+              <GatedAnalytics />
+            </QueryClientProvider>
+          </ThemeProvider>
+        </AnalyticsProvider>
       </AuthProvider>
     </ConsentProvider>
   );

@@ -14,6 +14,9 @@ import {
 } from "@/components/ui/card";
 import { Atom, Github, Mail, Loader2, CheckCircle2 } from "lucide-react";
 import { useState, useEffect } from "react";
+import { track } from "@/lib/analytics";
+
+const PENDING_SIGNUP_KEY = "tqc-pending-signup";
 
 export default function SignupPage() {
   const router = useRouter();
@@ -34,6 +37,10 @@ export default function SignupPage() {
     e.preventDefault();
     setIsLoading(true);
     setError(null);
+    track("signup_started", { method: "email" });
+    try {
+      localStorage.setItem(PENDING_SIGNUP_KEY, "email");
+    } catch { /* storage unavailable */ }
 
     const { data, error: authError } = await supabase.auth.signUp({
       email,
@@ -61,6 +68,10 @@ export default function SignupPage() {
   };
 
   const handleGitHubSignup = async () => {
+    track("signup_started", { method: "github" });
+    try {
+      localStorage.setItem(PENDING_SIGNUP_KEY, "github");
+    } catch { /* storage unavailable */ }
     const { error: authError } = await supabase.auth.signInWithOAuth({
       provider: "github",
       options: {
