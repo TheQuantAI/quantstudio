@@ -204,7 +204,21 @@ export default function SignupPage() {
           </form>
 
           <p className="text-center text-xs text-muted-foreground">
-            By creating an account, you agree to our Terms of Service and Privacy Policy.
+            By creating an account, you agree to our{" "}
+            <a
+              href="https://thequantcloud.com/terms"
+              className="text-quantum hover:underline"
+            >
+              Terms of Service
+            </a>{" "}
+            and{" "}
+            <a
+              href="https://thequantcloud.com/privacy"
+              className="text-quantum hover:underline"
+            >
+              Privacy Policy
+            </a>
+            .
           </p>
 
           <p className="text-center text-sm text-muted-foreground">

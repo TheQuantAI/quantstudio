@@ -294,6 +294,12 @@ export default function HomePage() {
               >
                 Pricing
               </Link>
+              <a
+                href="https://thequantcloud.com/privacy"
+                className="hover:text-foreground transition-colors"
+              >
+                Privacy
+              </a>
             </div>
           </div>
         </div>
