@@ -13,7 +13,8 @@ import {
   CardTitle,
 } from "@/components/ui/card";
 import { Atom, Github, Mail, Loader2 } from "lucide-react";
-import { useState, useEffect, Suspense } from "react";
+import { useState, useEffect, useRef, Suspense } from "react";
+import { Captcha, type CaptchaHandle, isCaptchaConfigured } from "@/components/captcha";
 
 function LoginForm() {
   const router = useRouter();
@@ -25,6 +26,11 @@ function LoginForm() {
   const [password, setPassword] = useState("");
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [captchaToken, setCaptchaToken] = useState("");
+  const captchaRef = useRef<CaptchaHandle>(null);
+  const captchaMissing = isCaptchaConfigured() && !captchaToken;
+  const [unconfirmed, setUnconfirmed] = useState(false);
+  const [resendMsg, setResendMsg] = useState<string | null>(null);
 
   // Redirect if already authenticated
   useEffect(() => {
@@ -37,19 +43,40 @@ function LoginForm() {
     e.preventDefault();
     setIsLoading(true);
     setError(null);
+    setUnconfirmed(false);
+    setResendMsg(null);
 
     const { error: authError } = await supabase.auth.signInWithPassword({
       email,
       password,
+      options: { captchaToken: captchaToken || undefined },
     });
 
+    captchaRef.current?.reset();
+    setCaptchaToken("");
+
     if (authError) {
-      setError(authError.message);
+      // Supabase returns an "Email not confirmed" error for unconfirmed accounts.
+      if (/confirm/i.test(authError.message)) {
+        setUnconfirmed(true);
+      } else {
+        setError(authError.message);
+      }
       setIsLoading(false);
     } else {
       router.push(callbackUrl);
       router.refresh();
     }
+  };
+
+  const handleResendConfirmation = async () => {
+    setResendMsg(null);
+    const { error: resendError } = await supabase.auth.resend({ type: "signup", email });
+    setResendMsg(
+      resendError
+        ? resendError.message
+        : "Confirmation email sent — check your inbox, then log in.",
+    );
   };
 
   const handleGitHubLogin = async () => {
@@ -78,6 +105,21 @@ function LoginForm() {
           {error && (
             <div className="rounded-md bg-destructive/10 border border-destructive/20 px-3 py-2 text-sm text-destructive">
               {error}
+            </div>
+          )}
+
+          {unconfirmed && (
+            <div className="rounded-md bg-amber-500/10 border border-amber-500/20 px-3 py-2 text-sm">
+              <p className="mb-2">Please confirm your email before logging in.</p>
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                onClick={handleResendConfirmation}
+              >
+                Resend confirmation email
+              </Button>
+              {resendMsg && <p className="mt-2 text-muted-foreground">{resendMsg}</p>}
             </div>
           )}
 
@@ -138,11 +180,12 @@ function LoginForm() {
                 minLength={6}
               />
             </div>
+            <Captcha ref={captchaRef} onVerify={setCaptchaToken} />
             <Button
               type="submit"
               variant="outline"
               className="w-full gap-2"
-              disabled={isLoading}
+              disabled={isLoading || captchaMissing}
             >
               {isLoading ? (
                 <Loader2 className="h-4 w-4 animate-spin" />

@@ -39,6 +39,7 @@ import { runCircuit, saveCircuit, updateCircuit, listCircuits, deleteCircuit, ty
 import { AuthGateModal } from "@/components/auth-gate-modal";
 import { track } from "@/lib/analytics";
 import { stashPendingCircuit, popPendingCircuit } from "@/lib/pending-circuit";
+import { supabase } from "@/lib/supabase";
 
 // Dynamically import Monaco to avoid SSR issues
 const MonacoEditor = dynamic(() => import("@monaco-editor/react"), {
@@ -105,6 +106,15 @@ export default function StudioPage() {
   const { backends, fetchBackends } = useBackendStore();
   const { user } = useAuth();
   const [gateOpen, setGateOpen] = useState(false);
+  // STUDIO-016: a logged-in but unconfirmed user may browse + use the browser
+  // simulator, but cloud save/run is blocked until they confirm their email.
+  const blockedUnconfirmed = !!user && !user.emailConfirmed;
+  const [confirmResendMsg, setConfirmResendMsg] = useState<string | null>(null);
+  const resendConfirmation = useCallback(async () => {
+    if (!user?.email) return;
+    const { error: resendError } = await supabase.auth.resend({ type: "signup", email: user.email });
+    setConfirmResendMsg(resendError ? resendError.message : "Confirmation email sent.");
+  }, [user]);
 
   // STUDIO-014: gate anonymous users on their first edit (isDirty flips true
   // after loadTemplate/reset sets it false). Fires the STUDIO-015 edit_attempt
@@ -134,6 +144,12 @@ export default function StudioPage() {
     setGateOpen(false);
     setCode(pending.code);
     setCircuitName(pending.name);
+    // STUDIO-016: don't cloud-save for an unconfirmed session — keep the work in
+    // the editor; the confirm-email banner prompts them, and Save works after.
+    if (!user.emailConfirmed) {
+      addLog("info", "Confirm your email to save this circuit to your account.");
+      return;
+    }
     const metadata = pending.forkedFrom
       ? { forked_from: pending.forkedFrom.id, forked_from_name: pending.forkedFrom.name }
       : undefined;
@@ -216,6 +232,11 @@ export default function StudioPage() {
       setGateOpen(true);
       return;
     }
+    // STUDIO-016: unconfirmed users can't persist to their account yet.
+    if (blockedUnconfirmed) {
+      setError("Confirm your email to save circuits to your account.");
+      return;
+    }
     setIsSaving(true);
     setSaveSuccess(false);
     try {
@@ -239,7 +260,7 @@ export default function StudioPage() {
     } finally {
       setIsSaving(false);
     }
-  }, [circuitName, code, userId, user, setError]);
+  }, [circuitName, code, userId, user, blockedUnconfirmed, setError]);
 
   // Load a saved circuit
   const handleLoadCircuit = useCallback(
@@ -375,6 +396,13 @@ export default function StudioPage() {
 
   // Execute circuit via FastAPI backend
   const handleRun = useCallback(async () => {
+    // STUDIO-016: block cloud runs for unconfirmed users; browser sim stays open.
+    if (blockedUnconfirmed && selectedBackend !== "browser_sim") {
+      setBottomTab("terminal");
+      setTerminalOpen(true);
+      addLog("error", "Confirm your email to run on the cloud. You can still use the browser simulator.");
+      return;
+    }
     setExecuting(true);
     setError(null);
     setRightPanelTab("results");
@@ -437,7 +465,7 @@ export default function StudioPage() {
     } finally {
       setExecuting(false);
     }
-  }, [code, circuitName, selectedBackend, setExecuting, setResult, setError, setCircuitDiagram, addLog, terminalOpen, setBottomTab]);
+  }, [code, circuitName, selectedBackend, blockedUnconfirmed, setExecuting, setResult, setError, setCircuitDiagram, addLog, terminalOpen, setBottomTab, setTerminalOpen]);
 
   const handleCopyCode = useCallback(() => {
     navigator.clipboard.writeText(code);
@@ -460,6 +488,15 @@ export default function StudioPage() {
         onClose={() => setGateOpen(false)}
         onBeforeAuth={stashNow}
       />
+      {blockedUnconfirmed && (
+        <div className="flex flex-wrap items-center gap-2 border-b border-amber-500/30 bg-amber-500/10 px-4 py-2 text-sm">
+          <span>⚠️ Confirm your email to save &amp; run in the cloud. The browser simulator still works.</span>
+          <button onClick={resendConfirmation} className="font-medium text-quantum hover:underline">
+            Resend email
+          </button>
+          {confirmResendMsg && <span className="text-muted-foreground">{confirmResendMsg}</span>}
+        </div>
+      )}
       {/* Toolbar */}
       <div className="flex items-center gap-2 px-4 py-2 border-b border-border bg-card">
         {/* Circuit name */}

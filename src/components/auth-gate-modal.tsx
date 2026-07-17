@@ -6,11 +6,12 @@
 
 "use client";
 
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { supabase } from "@/lib/supabase";
 import { Button } from "@/components/ui/button";
 import { Atom, Github, Loader2, Mail, X } from "lucide-react";
 import { track } from "@/lib/analytics";
+import { Captcha, type CaptchaHandle, isCaptchaConfigured } from "@/components/captcha";
 
 const PENDING_SIGNUP_KEY = "tqc-pending-signup";
 
@@ -28,8 +29,16 @@ export function AuthGateModal({ open, onClose, onBeforeAuth }: AuthGateModalProp
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [emailSent, setEmailSent] = useState(false);
+  const [captchaToken, setCaptchaToken] = useState("");
+  const captchaRef = useRef<CaptchaHandle>(null);
+  const captchaMissing = isCaptchaConfigured() && !captchaToken;
 
   if (!open) return null;
+
+  const resetCaptcha = () => {
+    captchaRef.current?.reset();
+    setCaptchaToken("");
+  };
 
   const markSignupStarted = (method: "email" | "github") => {
     track("signup_started", { method });
@@ -51,9 +60,13 @@ export function AuthGateModal({ open, onClose, onBeforeAuth }: AuthGateModalProp
       const { data, error: authError } = await supabase.auth.signUp({
         email,
         password,
-        options: { emailRedirectTo: `${window.location.origin}/studio` },
+        options: {
+          emailRedirectTo: `${window.location.origin}/studio`,
+          captchaToken: captchaToken || undefined,
+        },
       });
       setIsLoading(false);
+      resetCaptcha();
       if (authError) {
         setError(authError.message);
       } else if (data?.user?.identities?.length === 0) {
@@ -66,8 +79,13 @@ export function AuthGateModal({ open, onClose, onBeforeAuth }: AuthGateModalProp
       // Auto-confirmed (data.session present): the parent's auth effect saves the
       // stashed circuit once signed in.
     } else {
-      const { error: authError } = await supabase.auth.signInWithPassword({ email, password });
+      const { error: authError } = await supabase.auth.signInWithPassword({
+        email,
+        password,
+        options: { captchaToken: captchaToken || undefined },
+      });
       setIsLoading(false);
+      resetCaptcha();
       if (authError) setError(authError.message);
     }
   };
@@ -143,7 +161,13 @@ export function AuthGateModal({ open, onClose, onBeforeAuth }: AuthGateModalProp
             onChange={(e) => setPassword(e.target.value)}
             className="w-full rounded-md border border-border bg-background px-3 py-2 text-sm"
           />
-          <Button type="submit" variant="quantum" className="w-full" disabled={isLoading}>
+          <Captcha ref={captchaRef} onVerify={setCaptchaToken} />
+          <Button
+            type="submit"
+            variant="quantum"
+            className="w-full"
+            disabled={isLoading || captchaMissing}
+          >
             {isLoading ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
             {mode === "signup" ? "Create account" : "Log in"}
           </Button>
