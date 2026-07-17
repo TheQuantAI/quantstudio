@@ -211,10 +211,11 @@ export async function saveCircuit(
   code: string,
   description: string = "",
   userId: string = "anonymous",
+  metadata?: Record<string, unknown>,
 ): Promise<CircuitResponse> {
   if (isCloudAuthenticated()) {
     try {
-      const saved = await cloudSaveCircuit({ name, code });
+      const saved = await cloudSaveCircuit({ name, code, metadata });
       return {
         id: saved.id,
         name: saved.name,

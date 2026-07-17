@@ -57,6 +57,8 @@ interface CircuitState {
   circuitName: string;
   circuitId: string | null;
   isDirty: boolean;
+  /** Template this circuit was opened from (STUDIO-014 provenance), if any. */
+  forkedFrom: { id: string; name: string } | null;
 
   // Execution
   isExecuting: boolean;
@@ -100,6 +102,7 @@ export const useCircuitStore = create<CircuitState>((set) => ({
   circuitName: "Untitled Circuit",
   circuitId: null,
   isDirty: false,
+  forkedFrom: null,
 
   // Execution defaults
   isExecuting: false,
@@ -125,6 +128,7 @@ export const useCircuitStore = create<CircuitState>((set) => ({
       circuitName: "Untitled Circuit",
       circuitId: null,
       isDirty: false,
+      forkedFrom: null,
       result: null,
       error: null,
       circuitDiagram: null,
@@ -135,6 +139,7 @@ export const useCircuitStore = create<CircuitState>((set) => ({
       circuitName: template.name,
       circuitId: null,
       isDirty: false,
+      forkedFrom: { id: template.id, name: template.name },
       result: null,
       error: null,
       circuitDiagram: null,

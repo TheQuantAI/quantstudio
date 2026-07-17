@@ -36,6 +36,9 @@ import {
 import { useCallback, useRef, useState, useEffect } from "react";
 import { useAuth } from "@/components/auth-provider";
 import { runCircuit, saveCircuit, updateCircuit, listCircuits, deleteCircuit, type CircuitResponse } from "@/lib/api";
+import { AuthGateModal } from "@/components/auth-gate-modal";
+import { track } from "@/lib/analytics";
+import { stashPendingCircuit, popPendingCircuit } from "@/lib/pending-circuit";
 
 // Dynamically import Monaco to avoid SSR issues
 const MonacoEditor = dynamic(() => import("@monaco-editor/react"), {
@@ -81,6 +84,8 @@ export default function StudioPage() {
   const {
     code,
     circuitName,
+    isDirty,
+    forkedFrom,
     isExecuting,
     result,
     error,
@@ -99,6 +104,48 @@ export default function StudioPage() {
 
   const { backends, fetchBackends } = useBackendStore();
   const { user } = useAuth();
+  const [gateOpen, setGateOpen] = useState(false);
+
+  // STUDIO-014: gate anonymous users on their first edit (isDirty flips true
+  // after loadTemplate/reset sets it false). Fires the STUDIO-015 edit_attempt
+  // funnel event. Authenticated users are exempt.
+  useEffect(() => {
+    if (isDirty && !user) {
+      setGateOpen(true);
+      track("edit_attempt", { template: forkedFrom?.name });
+    }
+  }, [isDirty, user, forkedFrom]);
+
+  // Stash the in-progress edit before any Supabase redirect so it survives login.
+  const stashNow = useCallback(() => {
+    stashPendingCircuit({
+      code: useCircuitStore.getState().code,
+      name: useCircuitStore.getState().circuitName,
+      forkedFrom: useCircuitStore.getState().forkedFrom,
+    });
+  }, []);
+
+  // On return authenticated, restore the stashed edit and save it as a NEW
+  // circuit (never touching the source template), recording provenance.
+  useEffect(() => {
+    if (!user) return;
+    const pending = popPendingCircuit();
+    if (!pending) return;
+    setGateOpen(false);
+    setCode(pending.code);
+    setCircuitName(pending.name);
+    const metadata = pending.forkedFrom
+      ? { forked_from: pending.forkedFrom.id, forked_from_name: pending.forkedFrom.name }
+      : undefined;
+    saveCircuit(pending.name, pending.code, "", user.id, metadata)
+      .then((saved) => {
+        useCircuitStore.getState().setCircuitId(saved.id);
+        useCircuitStore.setState({ isDirty: false });
+        addLog("success", `Saved "${pending.name}" to your circuits.`);
+      })
+      .catch(() => setError("Could not save your circuit — it's still in the editor."));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [user]);
 
   // Fetch backends from the cloud API on mount
   useEffect(() => {
@@ -164,16 +211,24 @@ export default function StudioPage() {
 
   // Save current circuit
   const handleSave = useCallback(async () => {
+    // STUDIO-014: anonymous users must sign in before saving.
+    if (!user) {
+      setGateOpen(true);
+      return;
+    }
     setIsSaving(true);
     setSaveSuccess(false);
     try {
-      const { circuitId } = useCircuitStore.getState();
+      const { circuitId, forkedFrom: fork } = useCircuitStore.getState();
       if (circuitId) {
         // Update existing
         await updateCircuit(circuitId, { name: circuitName, code });
       } else {
-        // Create new
-        const saved = await saveCircuit(circuitName, code, "", userId);
+        // Create new — carry template provenance if this was forked.
+        const metadata = fork
+          ? { forked_from: fork.id, forked_from_name: fork.name }
+          : undefined;
+        const saved = await saveCircuit(circuitName, code, "", userId, metadata);
         useCircuitStore.getState().setCircuitId(saved.id);
       }
       setSaveSuccess(true);
@@ -184,7 +239,7 @@ export default function StudioPage() {
     } finally {
       setIsSaving(false);
     }
-  }, [circuitName, code, userId, setError]);
+  }, [circuitName, code, userId, user, setError]);
 
   // Load a saved circuit
   const handleLoadCircuit = useCallback(
@@ -400,6 +455,11 @@ export default function StudioPage() {
 
   return (
     <div className="flex flex-col h-[calc(100vh-3.5rem)]">
+      <AuthGateModal
+        open={gateOpen}
+        onClose={() => setGateOpen(false)}
+        onBeforeAuth={stashNow}
+      />
       {/* Toolbar */}
       <div className="flex items-center gap-2 px-4 py-2 border-b border-border bg-card">
         {/* Circuit name */}
@@ -589,7 +649,12 @@ export default function StudioPage() {
         <Button variant="ghost" size="icon" onClick={handleDownload} title="Download .py">
           <Download className="h-4 w-4" />
         </Button>
-        <Button variant="ghost" size="icon" onClick={resetCircuit} title="New circuit">
+        <Button
+          variant="ghost"
+          size="icon"
+          onClick={() => (user ? resetCircuit() : setGateOpen(true))}
+          title="New circuit"
+        >
           <RotateCcw className="h-4 w-4" />
         </Button>
 
