@@ -29,6 +29,7 @@ import {
 } from "lucide-react";
 import { useCircuitStore, CircuitTemplate } from "@/store";
 import { CIRCUIT_TEMPLATES } from "@/lib/templates";
+import { track } from "@/lib/analytics";
 
 /* ── Category metadata ─────────────────────────────────────────── */
 const CATEGORIES = [
@@ -102,6 +103,7 @@ export default function ExplorePage() {
   }, []);
 
   const handleOpen = (template: CircuitTemplate) => {
+    track("template_run", { template: template.name, category: template.category });
     loadTemplate(template);
     router.push("/studio");
   };

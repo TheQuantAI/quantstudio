@@ -14,6 +14,9 @@ import {
   getAuthToken,
   type CloudBackendInfo,
 } from "./cloud-api";
+import { track } from "./analytics";
+
+const FIRST_CLOUD_RUN_KEY = "tqc-first-cloud-run";
 
 export interface ExecutionResult {
   counts: Record<string, number>;
@@ -108,6 +111,18 @@ export async function runCircuit(
         circuit_diagram = generateDiagramFromCode(code);
       } catch { /* diagram generation is best-effort */ }
 
+      // Analytics (STUDIO-015): a successful cloud run, and the first one once.
+      // Only mark "first run seen" if the event actually fired (analytics active),
+      // so a cloud run made before consent doesn't silently suppress it later.
+      track("circuit_run", { mode: "cloud", backend: result.backend, shots });
+      try {
+        if (!localStorage.getItem(FIRST_CLOUD_RUN_KEY)) {
+          if (track("first_cloud_run", { backend: result.backend })) {
+            localStorage.setItem(FIRST_CLOUD_RUN_KEY, "1");
+          }
+        }
+      } catch { /* storage unavailable — skip first-run marker */ }
+
       return {
         counts,
         probabilities,
@@ -136,7 +151,9 @@ export async function runCircuit(
 
   // Fallback: browser simulator
   const { simulateCircuit } = await import("./simulator");
-  return simulateCircuit(code, shots);
+  const localResult = await simulateCircuit(code, shots);
+  track("circuit_run", { mode: "local", backend: "browser_sim", shots });
+  return localResult;
 }
 
 /** Map a cloud backend to the Studio BackendInfo shape */
