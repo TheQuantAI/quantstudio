@@ -15,6 +15,8 @@ import {
 import { Atom, Github, Mail, Loader2, CheckCircle2 } from "lucide-react";
 import { useState, useEffect } from "react";
 import { track } from "@/lib/analytics";
+import { Captcha, type CaptchaHandle, isCaptchaConfigured } from "@/components/captcha";
+import { useRef } from "react";
 
 const PENDING_SIGNUP_KEY = "tqc-pending-signup";
 
@@ -27,6 +29,9 @@ export default function SignupPage() {
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [emailSent, setEmailSent] = useState(false);
+  const [captchaToken, setCaptchaToken] = useState("");
+  const captchaRef = useRef<CaptchaHandle>(null);
+  const captchaMissing = isCaptchaConfigured() && !captchaToken;
 
   // Redirect if already authenticated
   useEffect(() => {
@@ -48,10 +53,13 @@ export default function SignupPage() {
       options: {
         data: { full_name: name },
         emailRedirectTo: `${window.location.origin}/studio`,
+        captchaToken: captchaToken || undefined,
       },
     });
 
     setIsLoading(false);
+    captchaRef.current?.reset();
+    setCaptchaToken("");
 
     if (authError) {
       setError(authError.message);
@@ -199,11 +207,12 @@ export default function SignupPage() {
                 minLength={6}
               />
             </div>
+            <Captcha ref={captchaRef} onVerify={setCaptchaToken} />
             <Button
               type="submit"
               variant="outline"
               className="w-full gap-2"
-              disabled={isLoading}
+              disabled={isLoading || captchaMissing}
             >
               {isLoading ? (
                 <Loader2 className="h-4 w-4 animate-spin" />

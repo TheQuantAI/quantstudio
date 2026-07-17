@@ -22,6 +22,8 @@ interface AuthUser {
   email: string | null;
   name: string | null;
   image: string | null;
+  /** True once the user has confirmed their email (STUDIO-016). */
+  emailConfirmed: boolean;
 }
 
 interface AuthState {
@@ -58,6 +60,7 @@ function mapUser(user: User | null): AuthUser | null {
       user.email?.split("@")[0] ??
       null,
     image: user.user_metadata?.avatar_url ?? null,
+    emailConfirmed: Boolean(user.email_confirmed_at),
   };
 }
 
