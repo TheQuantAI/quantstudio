@@ -3,11 +3,16 @@
 
 import { createClient } from "@supabase/supabase-js";
 
-const SUPABASE_URL =
-  process.env.NEXT_PUBLIC_SUPABASE_URL || "https://ccqacsutdpetwjuprhfu.supabase.co";
-const SUPABASE_ANON_KEY =
-  process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY ||
-  "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImNjcWFjc3V0ZHBldHdqdXByaGZ1Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzM1ODE2NjEsImV4cCI6MjA4OTE1NzY2MX0.JTx-0s1AMj4gUFRcOhLCjnRSgHI3jSjwR54cvMs8RzM";
+// Config comes from env only (STUDIO-017) — no hardcoded fallback. Set these in
+// .env.local for local dev and in Vercel (Prod+Preview) for deploys.
+const SUPABASE_URL = process.env.NEXT_PUBLIC_SUPABASE_URL;
+const SUPABASE_ANON_KEY = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
+
+if (!SUPABASE_URL || !SUPABASE_ANON_KEY) {
+  throw new Error(
+    "Missing NEXT_PUBLIC_SUPABASE_URL / NEXT_PUBLIC_SUPABASE_ANON_KEY — set them in your env (.env.local / Vercel).",
+  );
+}
 
 export const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
   auth: {

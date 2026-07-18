@@ -19,36 +19,26 @@ const POLL_INITIAL_MS = 500;
 const POLL_MAX_MS = 5_000;
 
 // ─── Auth token helper ──────────────────────────────────────────
-// In D7 this will read from Supabase Auth session.
-// For now, check localStorage for a manually-set token or API key.
+// Single source of truth: the Supabase session access token. supabase-js
+// persists it in localStorage under sb-<ref>-auth-token; React components read
+// the same token via useAuth().getAccessToken(). (STUDIO-017 removed dead
+// quantcloud_auth_token / quantcloud_api_key fallbacks — nothing wrote them.)
 
-const TOKEN_KEY = "quantcloud_auth_token";
-const API_KEY_KEY = "quantcloud_api_key";
-
-/** Get the current auth token (Supabase JWT or API key). Returns null if unauthenticated. */
+/** Get the current Supabase JWT. Returns null if unauthenticated. */
 export function getAuthToken(): string | null {
   if (typeof window === "undefined") return null;
 
-  // 1. Supabase session token (set by D7 auth integration)
-  const supabaseKey = Object.keys(localStorage).find((k) =>
-    k.startsWith("sb-") && k.endsWith("-auth-token")
+  const supabaseKey = Object.keys(localStorage).find(
+    (k) => k.startsWith("sb-") && k.endsWith("-auth-token"),
   );
-  if (supabaseKey) {
-    try {
-      const session = JSON.parse(localStorage.getItem(supabaseKey) || "{}");
-      if (session?.access_token) return session.access_token;
-    } catch { /* ignore */ }
+  if (!supabaseKey) return null;
+
+  try {
+    const session = JSON.parse(localStorage.getItem(supabaseKey) || "{}");
+    return session?.access_token ?? null;
+  } catch {
+    return null;
   }
-
-  // 2. Explicit token (set from dashboard or dev tools)
-  const token = localStorage.getItem(TOKEN_KEY);
-  if (token) return token;
-
-  // 3. API key
-  const apiKey = localStorage.getItem(API_KEY_KEY);
-  if (apiKey) return apiKey;
-
-  return null;
 }
 
 /** Build Authorization header if token is available */

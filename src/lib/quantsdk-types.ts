@@ -1,5 +1,9 @@
 // QuantSDK type definitions for Monaco Editor autocomplete
-// These provide IntelliSense when writing QuantSDK code in the Studio
+// These provide IntelliSense when writing QuantSDK code in the Studio.
+//
+// HAND-MAINTAINED (not generated). Keep in sync with the quantsdk public API —
+// update when the SDK adds/renames gates or methods (cf. quantsdk
+// tests/test_api_surface.py and lib/quantsdk-stub.py). Last synced: STUDIO-017.
 
 export const QUANTSDK_TYPE_DEFS = `
 declare module "quantsdk" {
@@ -30,6 +34,10 @@ declare module "quantsdk" {
     t(qubit: number): Circuit;
     /** T† gate (adjoint of T) */
     tdg(qubit: number): Circuit;
+    /** √X gate (SX) */
+    sx(qubit: number): Circuit;
+    /** Phase gate — applies a phase of theta */
+    p(qubit: number, theta: number): Circuit;
     /** Rotation around X-axis */
     rx(qubit: number, theta: number): Circuit;
     /** Rotation around Y-axis */
@@ -46,6 +54,16 @@ declare module "quantsdk" {
     cz(control: number, target: number): Circuit;
     /** Controlled-Phase gate */
     cp(control: number, target: number, theta: number): Circuit;
+    /** Controlled-Y gate */
+    cy(control: number, target: number): Circuit;
+    /** Controlled-H gate */
+    ch(control: number, target: number): Circuit;
+    /** Controlled RX rotation */
+    crx(control: number, target: number, theta: number): Circuit;
+    /** Controlled RY rotation */
+    cry(control: number, target: number, theta: number): Circuit;
+    /** Controlled RZ rotation */
+    crz(control: number, target: number, theta: number): Circuit;
     /** SWAP gate */
     swap(q1: number, q2: number): Circuit;
     /** iSWAP gate */

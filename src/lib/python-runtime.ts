@@ -26,7 +26,10 @@ export async function loadPyodide(): Promise<PyodideInterface> {
   if (loadingPromise) return loadingPromise;
 
   loadingPromise = (async () => {
-    // Dynamic import from CDN — CPython compiled to WebAssembly
+    // Dynamic import from CDN — CPython compiled to WebAssembly.
+    // This pinned CDN version is the single source of truth for Pyodide; there
+    // is intentionally no npm "pyodide" dependency (STUDIO-017). Bump both URLs
+    // together if upgrading.
     const cdnUrl = "https://cdn.jsdelivr.net/pyodide/v0.27.5/full/pyodide.mjs";
     const pyodideModule = await (Function("url", "return import(url)")(cdnUrl)) as {
       loadPyodide: (opts?: Record<string, unknown>) => Promise<PyodideInterface>;
