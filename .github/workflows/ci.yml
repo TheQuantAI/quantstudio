@@ -37,6 +37,13 @@ jobs:
 
       - name: Build
         run: npm run build
+        env:
+          # Public client config. Placeholder values are sufficient to build —
+          # static prerender constructs the Supabase client but makes no network
+          # calls. Real values live in Vercel for deploys (STUDIO-017 made the
+          # app env-only, so the build requires these to be present).
+          NEXT_PUBLIC_SUPABASE_URL: https://placeholder.supabase.co
+          NEXT_PUBLIC_SUPABASE_ANON_KEY: ci-placeholder-anon-key
 
   # The legacy backend/ BFF and its Python CI job were removed in STUDIO-017
   # (superseded by quantcloud-api). Studio is a pure frontend app; only the
