@@ -35,7 +35,8 @@ import {
 } from "lucide-react";
 import { useCallback, useRef, useState, useEffect } from "react";
 import { useAuth } from "@/components/auth-provider";
-import { runCircuit, saveCircuit, updateCircuit, listCircuits, deleteCircuit, type CircuitResponse } from "@/lib/api";
+import { runCircuit, submitCircuitToQPU, saveCircuit, updateCircuit, listCircuits, deleteCircuit, type CircuitResponse } from "@/lib/api";
+import { isQPUBackend } from "@/lib/cloud-api";
 import { AuthGateModal } from "@/components/auth-gate-modal";
 import { track } from "@/lib/analytics";
 import { stashPendingCircuit, popPendingCircuit } from "@/lib/pending-circuit";
@@ -167,6 +168,12 @@ export default function StudioPage() {
   useEffect(() => {
     fetchBackends();
   }, [fetchBackends]);
+
+  // Merge the user's own IBM devices once authenticated (API-016)
+  const { fetchIBMBackends } = useBackendStore();
+  useEffect(() => {
+    if (user) fetchIBMBackends();
+  }, [user, fetchIBMBackends]);
   const editorRef = useRef<unknown>(null);
   const terminalRef = useRef<PythonTerminalHandle>(null);
   const [showTemplates, setShowTemplates] = useState(false);
@@ -403,6 +410,26 @@ export default function StudioPage() {
       addLog("error", "Confirm your email to run on the cloud. You can still use the browser simulator.");
       return;
     }
+    // Real hardware (API-016): submit-only — IBM queues take minutes to hours,
+    // so we never block the tab waiting. Track progress on Dashboard → Jobs.
+    if (isQPUBackend(selectedBackend)) {
+      setError(null);
+      setTerminalOpen(true);
+      setBottomTab("terminal");
+      addLog("info", `Submitting "${circuitName}" to real hardware (${selectedBackend})...`);
+      try {
+        const job = await submitCircuitToQPU(code, 1024, selectedBackend);
+        addLog("success", `Submitted to IBM Quantum — job ${job.job_id}.`);
+        addLog("info", "Queue times on real hardware range from minutes to hours.");
+        addLog("info", "Safe to close this tab — track the job in Dashboard → Jobs.");
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : "QPU submission failed.";
+        addLog("error", msg);
+        setError(msg);
+      }
+      return;
+    }
+
     setExecuting(true);
     setError(null);
     setRightPanelTab("results");
@@ -564,33 +591,45 @@ export default function StudioPage() {
           </Button>
           {showBackendSelect && (
             <div className="absolute top-full right-0 mt-1 w-64 bg-card border border-border rounded-lg shadow-lg z-50 py-1">
-              {backends.map((backend) => (
-                <button
-                  key={backend.id}
-                  className={`w-full text-left px-3 py-2 hover:bg-accent transition-colors flex items-center justify-between ${
-                    backend.id === selectedBackend ? "bg-accent" : ""
-                  }`}
-                  onClick={() => {
-                    setSelectedBackend(backend.id);
-                    setShowBackendSelect(false);
-                  }}
-                >
-                  <div>
-                    <div className="text-sm font-medium">{backend.name}</div>
-                    <div className="text-xs text-muted-foreground">
-                      {backend.provider} · {backend.qubits} qubits
+              {[
+                { label: "Simulators", items: backends.filter((b) => !isQPUBackend(b.id)) },
+                { label: "Real hardware — your IBM account", items: backends.filter((b) => isQPUBackend(b.id)) },
+              ].map((group) =>
+                group.items.length === 0 ? null : (
+                  <div key={group.label}>
+                    <div className="px-3 pt-2 pb-1 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
+                      {group.label}
                     </div>
+                    {group.items.map((backend) => (
+                      <button
+                        key={backend.id}
+                        className={`w-full text-left px-3 py-2 hover:bg-accent transition-colors flex items-center justify-between ${
+                          backend.id === selectedBackend ? "bg-accent" : ""
+                        }`}
+                        onClick={() => {
+                          setSelectedBackend(backend.id);
+                          setShowBackendSelect(false);
+                        }}
+                      >
+                        <div>
+                          <div className="text-sm font-medium">{backend.name}</div>
+                          <div className="text-xs text-muted-foreground">
+                            {backend.provider} · {backend.qubits} qubits
+                          </div>
+                        </div>
+                        <Badge
+                          variant={
+                            backend.status === "online" ? "success" : "warning"
+                          }
+                          className="text-[10px]"
+                        >
+                          {isQPUBackend(backend.id) && backend.status === "online" ? "QPU" : backend.status}
+                        </Badge>
+                      </button>
+                    ))}
                   </div>
-                  <Badge
-                    variant={
-                      backend.status === "online" ? "success" : "warning"
-                    }
-                    className="text-[10px]"
-                  >
-                    {backend.status}
-                  </Badge>
-                </button>
-              ))}
+                )
+              )}
             </div>
           )}
         </div>
