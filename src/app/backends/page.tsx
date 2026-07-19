@@ -31,7 +31,7 @@ type SortKey = "name" | "qubits" | "fidelity" | "cost" | "queue";
 type FilterType = "all" | "simulator" | "hardware";
 
 export default function BackendsPage() {
-  const { backends, isLoading, fetchBackends } = useBackendStore();
+  const { backends, isLoading, fetchBackends, fetchIBMBackends } = useBackendStore();
   const [sortKey, setSortKey] = useState<SortKey>("name");
   const [filterType, setFilterType] = useState<FilterType>("all");
   const [searchQuery, setSearchQuery] = useState("");
@@ -39,10 +39,12 @@ export default function BackendsPage() {
   const [showComparison, setShowComparison] = useState(false);
   const [compareIds, setCompareIds] = useState<string[]>([]);
 
-  // Fetch backends from API on mount
+  // Fetch backends from API on mount; also pull the user's own IBM devices
+  // (no-op if not signed in / not connected).
   useEffect(() => {
     fetchBackends();
-  }, [fetchBackends]);
+    fetchIBMBackends();
+  }, [fetchBackends, fetchIBMBackends]);
 
   // Filter and sort
   const filteredBackends = useMemo(() => {

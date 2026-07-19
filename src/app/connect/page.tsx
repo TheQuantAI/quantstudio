@@ -545,16 +545,31 @@ function IBMQuantumCard({
   const [saving, setSaving] = useState(false);
   const [removing, setRemoving] = useState(false);
   const [ibmError, setIbmError] = useState<string | null>(null);
+  const [deviceCount, setDeviceCount] = useState<number | null>(null);
+
+  // How many real devices the connected account can see. null = not checked yet.
+  const loadDeviceCount = useCallback(async () => {
+    try {
+      const { listIBMBackends } = await import("@/lib/cloud-api");
+      const token = getAccessToken() ?? undefined;
+      const devices = await listIBMBackends(token);
+      setDeviceCount(devices.length);
+    } catch {
+      setDeviceCount(null); // couldn't check — leave the generic connected copy
+    }
+  }, [getAccessToken]);
 
   const refresh = useCallback(async () => {
     try {
       const { getIBMCredentialStatus } = await import("@/lib/cloud-api");
       const token = getAccessToken() ?? undefined;
-      setStatus(await getIBMCredentialStatus(token));
+      const s = await getIBMCredentialStatus(token);
+      setStatus(s);
+      if (s.connected) loadDeviceCount();
     } catch {
       setStatus(null); // bridge disabled or API unreachable — card stays minimal
     }
-  }, [getAccessToken]);
+  }, [getAccessToken, loadDeviceCount]);
 
   useEffect(() => {
     refresh();
@@ -564,12 +579,14 @@ function IBMQuantumCard({
     if (!ibmToken.trim()) return;
     setSaving(true);
     setIbmError(null);
+    setDeviceCount(null);
     try {
       const { saveIBMCredentials } = await import("@/lib/cloud-api");
       const authToken = getAccessToken() ?? undefined;
       const s = await saveIBMCredentials({ token: ibmToken.trim(), authToken });
       setStatus(s);
       setIbmToken("");
+      loadDeviceCount(); // surface how many devices the account exposes
     } catch (err) {
       setIbmError(
         err instanceof Error ? err.message : "Could not validate the IBM token."
@@ -623,11 +640,35 @@ function IBMQuantumCard({
                 </span>
               )}
             </div>
-            <p className="text-sm text-muted-foreground">
-              Your IBM devices now appear in the Studio backend picker under
-              &quot;Real hardware&quot;. QPU jobs queue at IBM (minutes to
-              hours) — track them on the Dashboard.
-            </p>
+            {deviceCount === 0 ? (
+              <div className="rounded-md border border-amber-500/40 bg-amber-500/10 p-3 text-sm text-amber-600 dark:text-amber-400">
+                Connected, but your IBM account currently exposes{" "}
+                <strong>no real devices</strong>. This usually means your IBM
+                plan has no instance with hardware access yet, or all systems are
+                temporarily offline. Open the{" "}
+                <a
+                  href="https://quantum.cloud.ibm.com"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="underline underline-offset-2"
+                >
+                  IBM Quantum Platform
+                </a>{" "}
+                and confirm an instance with QPU access is active, then
+                reconnect.
+              </div>
+            ) : (
+              <p className="text-sm text-muted-foreground">
+                {deviceCount != null && (
+                  <span className="font-medium text-foreground">
+                    {deviceCount} device{deviceCount === 1 ? "" : "s"} available.{" "}
+                  </span>
+                )}
+                Your IBM devices appear in the Studio backend picker and on the
+                Backends page under &quot;Real hardware&quot;. QPU jobs queue at
+                IBM (minutes to hours) — track them on the Dashboard.
+              </p>
+            )}
             <Button
               variant="outline"
               size="sm"
