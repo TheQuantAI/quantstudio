@@ -104,7 +104,7 @@ export default function StudioPage() {
     loadTemplate,
   } = useCircuitStore();
 
-  const { backends, fetchBackends } = useBackendStore();
+  const { backends, fetchBackends, ibmLoading } = useBackendStore();
   const { user } = useAuth();
   const [gateOpen, setGateOpen] = useState(false);
   // STUDIO-016: a logged-in but unconfirmed user may browse + use the browser
@@ -183,6 +183,9 @@ export default function StudioPage() {
   const [terminalOpen, setTerminalOpen] = useState(true);
   const [terminalHeight, setTerminalHeight] = useState(200);
   const [bottomTab, setBottomTab] = useState<BottomPanelTab>("terminal");
+  // Submit-only QPU runs don't use `isExecuting` (that drives the results panel);
+  // this tracks the brief compile+submit so the Run button shows a spinner.
+  const [submittingQPU, setSubmittingQPU] = useState(false);
 
   // Console output log
   const [consoleLog, setConsoleLog] = useState<ConsoleEntry[]>([]);
@@ -415,7 +418,11 @@ export default function StudioPage() {
     if (isQPUBackend(selectedBackend)) {
       setError(null);
       setTerminalOpen(true);
-      setBottomTab("terminal");
+      // Feedback for QPU submission is console output (there is no Pyodide run
+      // and no right-panel result), so show the Console tab — not the empty
+      // Pyodide terminal, which made submissions look like nothing happened.
+      setBottomTab("output");
+      setSubmittingQPU(true);
       addLog("info", `Submitting "${circuitName}" to real hardware (${selectedBackend})...`);
       try {
         const job = await submitCircuitToQPU(code, 1024, selectedBackend);
@@ -426,6 +433,8 @@ export default function StudioPage() {
         const msg = err instanceof Error ? err.message : "QPU submission failed.";
         addLog("error", msg);
         setError(msg);
+      } finally {
+        setSubmittingQPU(false);
       }
       return;
     }
@@ -630,8 +639,15 @@ export default function StudioPage() {
                   </div>
                 )
               )}
+              {/* Loading the user's IBM devices (a few seconds — hits IBM cloud) */}
+              {ibmLoading && !backends.some((b) => isQPUBackend(b.id)) && (
+                <div className="flex items-center gap-2 border-t border-border mt-1 px-3 py-2 text-xs text-muted-foreground">
+                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                  Loading your IBM devices…
+                </div>
+              )}
               {/* Nudge users who haven't connected real hardware yet (API-016) */}
-              {!backends.some((b) => isQPUBackend(b.id)) && (
+              {!ibmLoading && !backends.some((b) => isQPUBackend(b.id)) && (
                 <a
                   href="/connect"
                   className="block border-t border-border mt-1 px-3 py-2 text-xs text-muted-foreground hover:bg-accent hover:text-foreground transition-colors"
@@ -752,12 +768,12 @@ export default function StudioPage() {
           size="sm"
           className="gap-1.5 ml-2"
           onClick={handleRun}
-          disabled={isExecuting}
+          disabled={isExecuting || submittingQPU}
         >
-          {isExecuting ? (
+          {isExecuting || submittingQPU ? (
             <>
               <Loader2 className="h-3.5 w-3.5 animate-spin" />
-              Running...
+              {submittingQPU ? "Submitting..." : "Running..."}
             </>
           ) : (
             <>
