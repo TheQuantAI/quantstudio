@@ -630,6 +630,19 @@ export default function StudioPage() {
                   </div>
                 )
               )}
+              {/* Nudge users who haven't connected real hardware yet (API-016) */}
+              {!backends.some((b) => isQPUBackend(b.id)) && (
+                <a
+                  href="/connect"
+                  className="block border-t border-border mt-1 px-3 py-2 text-xs text-muted-foreground hover:bg-accent hover:text-foreground transition-colors"
+                >
+                  <span className="font-medium text-quantum">
+                    Run on real hardware →
+                  </span>
+                  <br />
+                  Connect your IBM Quantum account to add real QPUs here.
+                </a>
+              )}
             </div>
           )}
         </div>
