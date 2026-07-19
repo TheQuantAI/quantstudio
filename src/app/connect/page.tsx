@@ -645,18 +645,35 @@ function IBMQuantumCard({
           </div>
         ) : (
           <div className="space-y-3">
-            <p className="text-sm text-muted-foreground">
-              Get a free API token from the{" "}
-              <a
-                href="https://quantum.cloud.ibm.com"
-                target="_blank"
-                rel="noopener noreferrer"
-                className="text-quantum underline underline-offset-2"
-              >
-                IBM Quantum Platform
-              </a>{" "}
-              (Open Plan includes free monthly QPU time), then paste it here.
-            </p>
+            <div className="rounded-lg border border-border bg-muted/40 p-3 text-sm text-muted-foreground space-y-1.5">
+              <p className="font-medium text-foreground">
+                Get a free IBM Quantum API token
+              </p>
+              <ol className="list-decimal list-inside space-y-1">
+                <li>
+                  Sign up (free) at{" "}
+                  <a
+                    href="https://quantum.cloud.ibm.com"
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="text-quantum underline underline-offset-2"
+                  >
+                    quantum.cloud.ibm.com
+                  </a>{" "}
+                  — the Open Plan includes free monthly time on real 127-qubit
+                  systems.
+                </li>
+                <li>
+                  On your dashboard, find the <strong>API token</strong> panel
+                  and click copy.
+                </li>
+                <li>Paste it below and click Connect.</li>
+              </ol>
+              <p className="text-xs">
+                We validate the token with IBM, then store it encrypted — it is
+                never shown again and never leaves our server.
+              </p>
+            </div>
             <div className="flex gap-2">
               <input
                 type="password"

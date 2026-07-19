@@ -120,6 +120,27 @@ export default function BackendsPage() {
         </p>
       </div>
 
+      {/* Bring-your-own IBM hardware (API-016) */}
+      <div className="mb-8 rounded-lg border border-quantum/30 bg-quantum/5 p-4 flex flex-col sm:flex-row sm:items-center gap-3">
+        <Cpu className="h-6 w-6 text-quantum shrink-0" />
+        <div className="flex-1">
+          <p className="text-sm font-medium">
+            Run on real quantum hardware — bring your own IBM Quantum account
+          </p>
+          <p className="text-sm text-muted-foreground">
+            Connect a free IBM Quantum token and your real 127-qubit systems
+            appear in Studio&apos;s backend picker. This page lists the shared
+            simulators; your personal IBM devices show up once connected.
+          </p>
+        </div>
+        <a
+          href="/connect"
+          className="text-sm font-medium text-quantum underline underline-offset-2 whitespace-nowrap"
+        >
+          Connect IBM Quantum →
+        </a>
+      </div>
+
       {/* Summary cards */}
       <div className="grid grid-cols-2 md:grid-cols-5 gap-4 mb-8">
         <Card><CardContent className="pt-6 text-center">
