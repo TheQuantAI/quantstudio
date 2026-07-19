@@ -224,7 +224,10 @@ export const useBackendStore = create<BackendState>((set, get) => ({
         features: b.is_simulator ? ["simulator", "free-tier"] : ["hardware"],
       }));
       if (mapped.length > 0) {
-        set({ backends: mapped });
+        // Preserve any IBM devices already merged in (fetchIBMBackends can win
+        // the race): only the simulators/public catalog are replaced here.
+        const existingIBM = get().backends.filter((b) => b.id.startsWith("ibm_"));
+        set({ backends: [...mapped, ...existingIBM] });
       }
     } catch {
       // Silently fall back to defaults
@@ -238,6 +241,11 @@ export const useBackendStore = create<BackendState>((set, get) => ({
       const { listIBMBackends, isCloudAuthenticated } = await import("@/lib/cloud-api");
       if (!isCloudAuthenticated()) return;
       const devices = await listIBMBackends();
+      if (devices.length === 0) {
+        console.warn(
+          "[QuantStudio] IBM account connected but no devices returned — check your IBM plan/instance."
+        );
+      }
       const mapped: BackendInfo[] = devices.map((b) => ({
         id: b.name,
         name: b.name,
@@ -262,8 +270,10 @@ export const useBackendStore = create<BackendState>((set, get) => ({
         const nonIBM = get().backends.filter((b) => !b.id.startsWith("ibm_"));
         set({ backends: [...nonIBM, ...mapped] });
       }
-    } catch {
-      // Not connected / bridge disabled — picker simply shows simulators only.
+    } catch (err) {
+      // Not connected / bridge disabled / IBM error — picker shows simulators
+      // only. Log so a genuine failure isn't completely invisible.
+      console.warn("[QuantStudio] Could not load IBM devices:", err);
     }
   },
 }));
