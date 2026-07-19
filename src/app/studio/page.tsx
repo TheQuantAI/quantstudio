@@ -35,7 +35,7 @@ import {
 } from "lucide-react";
 import { useCallback, useRef, useState, useEffect } from "react";
 import { useAuth } from "@/components/auth-provider";
-import { runCircuit, submitCircuitToQPU, saveCircuit, updateCircuit, listCircuits, deleteCircuit, type CircuitResponse } from "@/lib/api";
+import { runCircuit, submitCircuitToQPU, pollQPUResult, saveCircuit, updateCircuit, listCircuits, deleteCircuit, type CircuitResponse } from "@/lib/api";
 import { isQPUBackend } from "@/lib/cloud-api";
 import { AuthGateModal } from "@/components/auth-gate-modal";
 import { track } from "@/lib/analytics";
@@ -186,6 +186,10 @@ export default function StudioPage() {
   // Submit-only QPU runs don't use `isExecuting` (that drives the results panel);
   // this tracks the brief compile+submit so the Run button shows a spinner.
   const [submittingQPU, setSubmittingQPU] = useState(false);
+  // A QPU job is submitted and we're waiting on IBM. Keeps the Run button
+  // disabled (so users don't burn their monthly QPU quota with repeat clicks)
+  // and drives the "queued at IBM" state in the results panel.
+  const [qpuPending, setQpuPending] = useState<null | { jobId: string; backend: string }>(null);
 
   // Console output log
   const [consoleLog, setConsoleLog] = useState<ConsoleEntry[]>([]);
@@ -417,24 +421,60 @@ export default function StudioPage() {
     // so we never block the tab waiting. Track progress on Dashboard → Jobs.
     if (isQPUBackend(selectedBackend)) {
       setError(null);
+      setResult(null);
+      setRightPanelTab("results");
       setTerminalOpen(true);
-      // Feedback for QPU submission is console output (there is no Pyodide run
-      // and no right-panel result), so show the Console tab — not the empty
-      // Pyodide terminal, which made submissions look like nothing happened.
+      // Feedback for QPU submission is console output, so show the Console tab —
+      // not the empty Pyodide terminal, which made runs look like nothing
+      // happened.
       setBottomTab("output");
       setSubmittingQPU(true);
       addLog("info", `Submitting "${circuitName}" to real hardware (${selectedBackend})...`);
+
+      let jobId: string;
       try {
         const job = await submitCircuitToQPU(code, 1024, selectedBackend);
-        addLog("success", `Submitted to IBM Quantum — job ${job.job_id}.`);
-        addLog("info", "Queue times on real hardware range from minutes to hours.");
-        addLog("info", "Safe to close this tab — track the job in Dashboard → Jobs.");
+        jobId = job.job_id;
+        setQpuPending({ jobId, backend: selectedBackend });
+        addLog("success", `Submitted to IBM Quantum — job ${jobId}.`);
+        addLog("info", "Queued at IBM — real-hardware queues range from a minute to a few hours.");
+        addLog("info", "You can keep working; results appear here and on the Dashboard when ready.");
       } catch (err) {
         const msg = err instanceof Error ? err.message : "QPU submission failed.";
         addLog("error", msg);
         setError(msg);
+        return;
       } finally {
         setSubmittingQPU(false);
+      }
+
+      // Poll in the background until IBM finishes, then render the result just
+      // like a simulator run. The tab stays usable; the Run button stays
+      // disabled (qpuPending) so repeat clicks don't burn the monthly quota.
+      try {
+        const data = await pollQPUResult(jobId, code, (s) => addLog("info", `Job status: ${s}…`));
+        addLog("success", `Result received from ${data.backend} in ${data.execution_time.toFixed(1)}s.`);
+        setResult({
+          counts: data.counts,
+          probabilities: data.probabilities,
+          mostLikely: data.most_likely,
+          shots: data.shots,
+          backend: data.backend,
+          executionTime: data.execution_time,
+          jobId: data.job_id,
+          metadata: {
+            numQubits: data.metadata?.num_qubits ?? 0,
+            circuitDepth: data.metadata?.circuit_depth ?? 0,
+            gateCount: data.metadata?.gate_count ?? 0,
+          },
+        });
+        if (data.circuit_diagram) setCircuitDiagram(data.circuit_diagram);
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : "Could not fetch the QPU result.";
+        // A timeout here is not a failure — the job is still queued at IBM.
+        addLog("info", `${msg} The job is tracked on the Dashboard and its result is saved automatically.`);
+      } finally {
+        setQpuPending(null);
       }
       return;
     }
@@ -768,12 +808,12 @@ export default function StudioPage() {
           size="sm"
           className="gap-1.5 ml-2"
           onClick={handleRun}
-          disabled={isExecuting || submittingQPU}
+          disabled={isExecuting || submittingQPU || qpuPending !== null}
         >
-          {isExecuting || submittingQPU ? (
+          {isExecuting || submittingQPU || qpuPending ? (
             <>
               <Loader2 className="h-3.5 w-3.5 animate-spin" />
-              {submittingQPU ? "Submitting..." : "Running..."}
+              {submittingQPU ? "Submitting..." : qpuPending ? "Queued at IBM..." : "Running..."}
             </>
           ) : (
             <>
@@ -994,7 +1034,7 @@ export default function StudioPage() {
                   )}
                 </div>
 
-                {!result && !error && !isExecuting && (
+                {!result && !error && !isExecuting && !qpuPending && (
                   <div className="text-center py-12 text-muted-foreground">
                     <Play className="h-12 w-12 mx-auto mb-3 opacity-30" />
                     <p className="text-sm">
@@ -1012,6 +1052,23 @@ export default function StudioPage() {
                     <p className="text-sm text-muted-foreground">
                       Executing on {currentBackend?.name}...
                     </p>
+                  </div>
+                )}
+
+                {qpuPending && !result && (
+                  <div className="text-center py-12">
+                    <Loader2 className="h-12 w-12 mx-auto mb-3 text-quantum animate-spin" />
+                    <p className="text-sm font-medium">
+                      Queued on {qpuPending.backend}
+                    </p>
+                    <p className="text-xs mt-1 text-muted-foreground max-w-xs mx-auto">
+                      Waiting for real hardware — this can take from a minute to a
+                      few hours. Results appear here automatically, and are saved
+                      to your Dashboard either way.
+                    </p>
+                    <code className="text-[10px] font-mono text-muted-foreground mt-2 inline-block">
+                      job {qpuPending.jobId.slice(0, 8)}
+                    </code>
                   </div>
                 )}
 

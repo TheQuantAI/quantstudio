@@ -246,12 +246,13 @@ export async function cloudSubmitCircuit(params: {
 export async function cloudPollJob(
   jobId: string,
   token?: string,
-  onStatusUpdate?: (status: string) => void
+  onStatusUpdate?: (status: string) => void,
+  timeoutMs: number = JOB_POLL_TIMEOUT_MS
 ): Promise<CloudJobResponse> {
   const start = Date.now();
   let interval = POLL_INITIAL_MS;
 
-  while (Date.now() - start < JOB_POLL_TIMEOUT_MS) {
+  while (Date.now() - start < timeoutMs) {
     const res = await cloudFetch(`/jobs/${jobId}`, { method: "GET" }, token);
     const job: CloudJobResponse = await res.json();
 

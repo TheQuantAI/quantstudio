@@ -92,6 +92,64 @@ export async function submitCircuitToQPU(
   return { job_id: job.job_id, status: job.status, backend: job.backend };
 }
 
+/** How long Studio foreground-polls a QPU job before handing off to the
+ *  Dashboard. Free-plan queues can exceed this; the job still completes and is
+ *  saved server-side regardless. */
+const QPU_POLL_TIMEOUT_MS = 20 * 60 * 1000; // 20 minutes
+
+/**
+ * Poll an already-submitted QPU job until it finishes, then return its result
+ * mapped to ExecutionResult. Non-blocking for the tab (the caller awaits it in
+ * the background). Throws CloudAPIError(408) if it's still queued past the
+ * timeout — the job keeps running and the result is retrievable from Dashboard.
+ */
+export async function pollQPUResult(
+  jobId: string,
+  code: string,
+  onStatusUpdate?: (status: string) => void,
+): Promise<ExecutionResult> {
+  const { cloudPollJob, cloudGetJobResult } = await import("./cloud-api");
+  const token = getAuthToken() ?? undefined;
+
+  const finalJob = await cloudPollJob(jobId, token, onStatusUpdate, QPU_POLL_TIMEOUT_MS);
+  if (finalJob.status === "failed") {
+    throw new Error(finalJob.error_message || "QPU job failed at the provider.");
+  }
+  if (finalJob.status === "cancelled") throw new Error("QPU job was cancelled.");
+  if (finalJob.status === "timeout") throw new Error("QPU job timed out at the provider.");
+
+  const result = await cloudGetJobResult(jobId, token);
+  const counts = result.counts;
+  const totalShots = Object.values(counts).reduce((a, b) => a + b, 0);
+  const mostLikely = Object.entries(counts).reduce(
+    (best, [state, count]) => (count > best[1] ? [state, count] : best),
+    ["", 0] as [string, number],
+  )[0];
+
+  let circuit_diagram = "";
+  try {
+    const { generateDiagramFromCode } = await import("./simulator");
+    circuit_diagram = generateDiagramFromCode(code);
+  } catch { /* best-effort */ }
+
+  return {
+    counts,
+    probabilities: result.probabilities ?? {},
+    most_likely: mostLikely,
+    shots: totalShots,
+    backend: result.backend ?? "ibm",
+    execution_time: (result.execution_time_ms ?? 0) / 1000,
+    job_id: result.job_id,
+    circuit_diagram,
+    metadata: {
+      num_qubits: (result.metadata?.num_qubits as number) ?? 0,
+      circuit_depth: (result.metadata?.transpiled_depth as number) ?? 0,
+      gate_count: (result.metadata?.transpiled_gates as number) ?? 0,
+      simulator: result.backend ?? undefined,
+    },
+  };
+}
+
 /**
  * Run a quantum circuit.
  *
