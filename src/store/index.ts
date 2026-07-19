@@ -153,6 +153,8 @@ export const useCircuitStore = create<CircuitState>((set) => ({
 interface BackendState {
   backends: BackendInfo[];
   isLoading: boolean;
+  /** True while the user's IBM devices are being fetched (slow — hits IBM cloud). */
+  ibmLoading: boolean;
   setBackends: (backends: BackendInfo[]) => void;
   setLoading: (loading: boolean) => void;
   fetchBackends: () => Promise<void>;
@@ -196,6 +198,7 @@ export const DEFAULT_BACKENDS: BackendInfo[] = [
 export const useBackendStore = create<BackendState>((set, get) => ({
   backends: DEFAULT_BACKENDS,
   isLoading: false,
+  ibmLoading: false,
   setBackends: (backends) => set({ backends }),
   setLoading: (loading) => set({ isLoading: loading }),
   fetchBackends: async () => {
@@ -240,6 +243,7 @@ export const useBackendStore = create<BackendState>((set, get) => ({
     try {
       const { listIBMBackends, isCloudAuthenticated } = await import("@/lib/cloud-api");
       if (!isCloudAuthenticated()) return;
+      set({ ibmLoading: true });
       const devices = await listIBMBackends();
       if (devices.length === 0) {
         console.warn(
@@ -274,6 +278,8 @@ export const useBackendStore = create<BackendState>((set, get) => ({
       // Not connected / bridge disabled / IBM error — picker shows simulators
       // only. Log so a genuine failure isn't completely invisible.
       console.warn("[QuantStudio] Could not load IBM devices:", err);
+    } finally {
+      set({ ibmLoading: false });
     }
   },
 }));
