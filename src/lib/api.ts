@@ -10,6 +10,7 @@ import {
   cloudGetCircuit,
   cloudUpdateCircuit,
   cloudDeleteCircuit,
+  cloudSubmitCircuit,
   isCloudAuthenticated,
   getAuthToken,
   type CloudBackendInfo,
@@ -54,6 +55,41 @@ export interface CircuitResponse {
   user_id: string;
   created_at: string;
   updated_at: string;
+}
+
+/**
+ * Submit a circuit to a real QPU (API-016) — submit-only, no result polling.
+ *
+ * IBM queue times run from minutes to hours; blocking the tab would be
+ * dishonest UX. The job is tracked on Dashboard → Jobs.
+ */
+export async function submitCircuitToQPU(
+  code: string,
+  shots: number = 1024,
+  backend: string,
+): Promise<{ job_id: string; status: string; backend: string | null }> {
+  let circuit_qasm: string | undefined;
+  let num_qubits: number | undefined;
+  try {
+    const { generateQasmFromCode } = await import("./python-runtime");
+    const compiled = await generateQasmFromCode(code);
+    circuit_qasm = compiled.qasm;
+    num_qubits = compiled.num_qubits;
+  } catch (qerr) {
+    const detail = qerr instanceof Error ? qerr.message : String(qerr);
+    throw new Error(`Could not prepare circuit for QPU submission: ${detail}`);
+  }
+
+  const job = await cloudSubmitCircuit({
+    code,
+    circuit_qasm,
+    num_qubits,
+    shots,
+    backend,
+  });
+
+  track("circuit_run", { mode: "qpu", backend, shots });
+  return { job_id: job.job_id, status: job.status, backend: job.backend };
 }
 
 /**

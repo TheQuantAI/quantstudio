@@ -491,6 +491,9 @@ export default function ConnectPage() {
             </CardContent>
           </Card>
 
+          {/* ── Real hardware: IBM Quantum (API-016) ──────────────── */}
+          {user && <IBMQuantumCard getAccessToken={getAccessToken} />}
+
           {/* ── All done CTA ──────────────────────────────────────── */}
           {verified && (
             <div className="text-center pt-4 space-y-4">
@@ -524,5 +527,164 @@ export default function ConnectPage() {
         </div>
       </div>
     </div>
+  );
+}
+
+// ─── IBM Quantum connect card (API-016) ──────────────────────────
+
+function IBMQuantumCard({
+  getAccessToken,
+}: {
+  getAccessToken: () => string | null;
+}) {
+  const [status, setStatus] = useState<{
+    connected: boolean;
+    token_hint: string | null;
+  } | null>(null);
+  const [ibmToken, setIbmToken] = useState("");
+  const [saving, setSaving] = useState(false);
+  const [removing, setRemoving] = useState(false);
+  const [ibmError, setIbmError] = useState<string | null>(null);
+
+  const refresh = useCallback(async () => {
+    try {
+      const { getIBMCredentialStatus } = await import("@/lib/cloud-api");
+      const token = getAccessToken() ?? undefined;
+      setStatus(await getIBMCredentialStatus(token));
+    } catch {
+      setStatus(null); // bridge disabled or API unreachable — card stays minimal
+    }
+  }, [getAccessToken]);
+
+  useEffect(() => {
+    refresh();
+  }, [refresh]);
+
+  const handleSave = async () => {
+    if (!ibmToken.trim()) return;
+    setSaving(true);
+    setIbmError(null);
+    try {
+      const { saveIBMCredentials } = await import("@/lib/cloud-api");
+      const authToken = getAccessToken() ?? undefined;
+      const s = await saveIBMCredentials({ token: ibmToken.trim(), authToken });
+      setStatus(s);
+      setIbmToken("");
+    } catch (err) {
+      setIbmError(
+        err instanceof Error ? err.message : "Could not validate the IBM token."
+      );
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const handleDisconnect = async () => {
+    setRemoving(true);
+    setIbmError(null);
+    try {
+      const { deleteIBMCredentials } = await import("@/lib/cloud-api");
+      const authToken = getAccessToken() ?? undefined;
+      await deleteIBMCredentials(authToken);
+      setStatus({ connected: false, token_hint: null });
+    } catch (err) {
+      setIbmError(err instanceof Error ? err.message : "Could not disconnect.");
+    } finally {
+      setRemoving(false);
+    }
+  };
+
+  return (
+    <Card>
+      <CardHeader className="flex flex-row items-start gap-4 space-y-0">
+        <div className="flex-shrink-0 w-8 h-8 rounded-full bg-quantum/20 border-2 border-quantum flex items-center justify-center">
+          <Server className="h-4 w-4 text-quantum" />
+        </div>
+        <div className="flex-1">
+          <CardTitle className="text-lg">
+            Real Hardware — Connect IBM Quantum
+          </CardTitle>
+          <CardDescription>
+            Bring your own IBM Quantum account and run circuits on real
+            127-qubit systems. Your token is validated live and stored
+            encrypted; it is never shown again.
+          </CardDescription>
+        </div>
+      </CardHeader>
+      <CardContent className="pl-16 space-y-3">
+        {status?.connected ? (
+          <div className="space-y-3">
+            <div className="flex items-center gap-2 text-sm text-green-500">
+              <CheckCircle2 className="h-4 w-4" />
+              IBM account connected
+              {status.token_hint && (
+                <span className="font-mono text-muted-foreground">
+                  ({status.token_hint})
+                </span>
+              )}
+            </div>
+            <p className="text-sm text-muted-foreground">
+              Your IBM devices now appear in the Studio backend picker under
+              &quot;Real hardware&quot;. QPU jobs queue at IBM (minutes to
+              hours) — track them on the Dashboard.
+            </p>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={handleDisconnect}
+              disabled={removing}
+              className="gap-1.5"
+            >
+              {removing ? (
+                <Loader2 className="h-3.5 w-3.5 animate-spin" />
+              ) : (
+                <Shield className="h-3.5 w-3.5" />
+              )}
+              Disconnect
+            </Button>
+          </div>
+        ) : (
+          <div className="space-y-3">
+            <p className="text-sm text-muted-foreground">
+              Get a free API token from the{" "}
+              <a
+                href="https://quantum.cloud.ibm.com"
+                target="_blank"
+                rel="noopener noreferrer"
+                className="text-quantum underline underline-offset-2"
+              >
+                IBM Quantum Platform
+              </a>{" "}
+              (Open Plan includes free monthly QPU time), then paste it here.
+            </p>
+            <div className="flex gap-2">
+              <input
+                type="password"
+                value={ibmToken}
+                onChange={(e) => setIbmToken(e.target.value)}
+                placeholder="IBM Quantum API token"
+                className="flex-1 rounded-md border border-border bg-background px-3 py-1.5 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-quantum/50"
+                autoComplete="off"
+              />
+              <Button
+                variant="quantum"
+                size="sm"
+                onClick={handleSave}
+                disabled={saving || !ibmToken.trim()}
+                className="gap-1.5"
+              >
+                {saving ? (
+                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                ) : (
+                  <Key className="h-3.5 w-3.5" />
+                )}
+                Connect
+              </Button>
+            </div>
+          </div>
+        )}
+        {ibmError && <p className="text-sm text-destructive">{ibmError}</p>}
+      </CardContent>
+    </Card>
   );
 }

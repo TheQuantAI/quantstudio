@@ -162,6 +162,56 @@ export async function cloudGetBackend(name: string): Promise<CloudBackendInfo> {
   return res.json();
 }
 
+// ─── Provider credentials — IBM hardware bridge (API-016) ───────
+
+export interface IBMCredentialStatus {
+  connected: boolean;
+  provider: string;
+  token_hint: string | null;
+  instance: string | null;
+  last_validated_at: string | null;
+}
+
+/** IBM connection status for the current user. Never contains the token. */
+export async function getIBMCredentialStatus(token?: string): Promise<IBMCredentialStatus> {
+  const res = await cloudFetch("/providers/ibm/credentials", { method: "GET" }, token);
+  return res.json();
+}
+
+/** Validate + save the user's IBM Quantum API token (encrypted server-side). */
+export async function saveIBMCredentials(params: {
+  token: string;
+  instance?: string;
+  authToken?: string;
+}): Promise<IBMCredentialStatus> {
+  const res = await cloudFetch(
+    "/providers/ibm/credentials",
+    {
+      method: "PUT",
+      body: JSON.stringify({ token: params.token, instance: params.instance }),
+    },
+    params.authToken
+  );
+  return res.json();
+}
+
+/** Disconnect the user's IBM Quantum account. */
+export async function deleteIBMCredentials(token?: string): Promise<void> {
+  await cloudFetch("/providers/ibm/credentials", { method: "DELETE" }, token);
+}
+
+/** Live list of real IBM devices available to the user's connected account. */
+export async function listIBMBackends(token?: string): Promise<CloudBackendInfo[]> {
+  const res = await cloudFetch("/providers/ibm/backends", { method: "GET" }, token);
+  const data: CloudBackendList = await res.json();
+  return data.backends;
+}
+
+/** True for real-hardware backend names (IBM devices, e.g. "ibm_brisbane"). */
+export function isQPUBackend(name: string | null | undefined): boolean {
+  return !!name && name.startsWith("ibm_");
+}
+
 // ─── Circuit execution (async job lifecycle) ────────────────────
 
 /** Submit a circuit for cloud execution. Returns the initial job response. */

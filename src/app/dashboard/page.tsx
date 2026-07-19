@@ -197,9 +197,15 @@ export default function DashboardPage() {
       case "completed": return "bg-green-500";
       case "failed": case "timeout": return "bg-red-500";
       case "running": case "dispatched": return "bg-blue-500 animate-pulse";
+      case "queued": return "bg-purple-500 animate-pulse"; // waiting at the QPU provider (API-016)
       case "cancelled": return "bg-gray-500";
       default: return "bg-yellow-500";
     }
+  }
+
+  // "queued" means the job is in line at the hardware provider (API-016).
+  function jobStatusLabel(status: string) {
+    return status === "queued" ? "Queued at IBM" : status;
   }
 
   function timeAgo(iso: string) {
@@ -433,7 +439,7 @@ export default function DashboardPage() {
                   <div className="flex items-center gap-3">
                     <div className={`w-2 h-2 rounded-full ${jobStatusColor(job.status)}`} />
                     <div>
-                      <p className="text-sm font-medium capitalize">{job.status}</p>
+                      <p className="text-sm font-medium capitalize">{jobStatusLabel(job.status)}</p>
                       <p className="text-xs text-muted-foreground">
                         {job.backend ?? "auto"} · {job.shots} shots
                       </p>

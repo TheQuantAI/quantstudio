@@ -156,6 +156,8 @@ interface BackendState {
   setBackends: (backends: BackendInfo[]) => void;
   setLoading: (loading: boolean) => void;
   fetchBackends: () => Promise<void>;
+  /** Merge the user's own IBM devices into the list (API-016; auth required). */
+  fetchIBMBackends: () => Promise<void>;
 }
 
 // Default backends are only used as fallback until the API responds.
@@ -191,7 +193,7 @@ export const DEFAULT_BACKENDS: BackendInfo[] = [
   },
 ];
 
-export const useBackendStore = create<BackendState>((set) => ({
+export const useBackendStore = create<BackendState>((set, get) => ({
   backends: DEFAULT_BACKENDS,
   isLoading: false,
   setBackends: (backends) => set({ backends }),
@@ -229,6 +231,39 @@ export const useBackendStore = create<BackendState>((set) => ({
       console.warn("[QuantStudio] Failed to fetch cloud backends, using defaults");
     } finally {
       set({ isLoading: false });
+    }
+  },
+  fetchIBMBackends: async () => {
+    try {
+      const { listIBMBackends, isCloudAuthenticated } = await import("@/lib/cloud-api");
+      if (!isCloudAuthenticated()) return;
+      const devices = await listIBMBackends();
+      const mapped: BackendInfo[] = devices.map((b) => ({
+        id: b.name,
+        name: b.name,
+        provider: "IBM Quantum (your account)",
+        type: "hardware" as const,
+        qubits: b.num_qubits,
+        status: (b.status === "online" ? "online" : "offline") as BackendInfo["status"],
+        queueDepth: b.queue_depth || 0,
+        avgFidelity: 0.99,
+        costPerShot: 0.0,
+        description: b.description || "",
+        technology: "superconducting",
+        nativeGates: b.native_gates || [],
+        connectivity: "heavy-hex",
+        maxShots: 100_000,
+        avgQueueTimeSec: b.avg_queue_time_sec || 0,
+        region: "ibm-cloud",
+        features: ["hardware", "byo-credentials"],
+      }));
+      if (mapped.length > 0) {
+        // Replace any previously merged IBM entries, keep simulators.
+        const nonIBM = get().backends.filter((b) => !b.id.startsWith("ibm_"));
+        set({ backends: [...nonIBM, ...mapped] });
+      }
+    } catch {
+      // Not connected / bridge disabled — picker simply shows simulators only.
     }
   },
 }));
