@@ -1,8 +1,37 @@
 import { create } from "zustand";
+import {
+  fetchWorkspaceTree,
+  openFile as apiOpenFile,
+  type CloudFolder,
+  type CloudFile,
+  type FileType,
+} from "@/lib/api";
 
 // ============================================================
 // Circuit Store — manages editor state and circuit execution
 // ============================================================
+
+// Workspace (API-017): an open editor tab. The ACTIVE tab is mirrored onto the
+// legacy single-circuit fields (code/circuitName/circuitId/isDirty) so Run, Save,
+// and the STUDIO-014 anon-gate keep working unchanged. `isDirty` lives on the tab;
+// the mirror is a projection — never set the mirror's isDirty directly.
+export interface OpenTab {
+  key: string; // stable internal id (dedupe is by fileId, not key)
+  fileId: string | null; // null = unsaved scratch tab
+  name: string;
+  fileType: FileType;
+  content: string;
+  folderId: string | null;
+  isDirty: boolean;
+}
+
+export interface WorkspaceTreeState {
+  folders: CloudFolder[];
+  files: CloudFile[];
+}
+
+let _tabCounter = 0;
+const nextTabKey = () => `t-${++_tabCounter}-${Date.now().toString(36)}`;
 
 export interface CircuitTemplate {
   id: string;
@@ -69,6 +98,14 @@ interface CircuitState {
   // Circuit visualization
   circuitDiagram: string | null;
 
+  // Workspace (API-017)
+  tree: WorkspaceTreeState;
+  treeLoading: boolean;
+  openTabs: OpenTab[];
+  activeKey: string | null;
+  /** file_type of the active tab; only "py" enables Run. */
+  activeFileType: FileType;
+
   // Actions
   setCode: (code: string) => void;
   setCircuitName: (name: string) => void;
@@ -80,6 +117,15 @@ interface CircuitState {
   setCircuitDiagram: (diagram: string | null) => void;
   resetCircuit: () => void;
   loadTemplate: (template: CircuitTemplate) => void;
+
+  // Workspace actions (API-017)
+  loadTree: () => Promise<void>;
+  openFileTab: (fileId: string) => Promise<void>;
+  openNewTab: (fileType: FileType, name: string, content?: string) => void;
+  setActiveTab: (key: string) => void;
+  closeTab: (key: string) => void;
+  /** After a successful save: bind the active tab to its file id and clear dirty. */
+  markActiveSaved: (file: { id: string; name: string; folder_id: string | null }) => void;
 }
 
 const DEFAULT_CODE = `import quantsdk as qs
@@ -96,8 +142,30 @@ print(result.counts)
 print(result.probabilities)
 `;
 
-export const useCircuitStore = create<CircuitState>((set) => ({
-  // Editor defaults
+// Always keep one active tab so Save/Run have somewhere to live.
+const SCRATCH_TAB: OpenTab = {
+  key: "scratch",
+  fileId: null,
+  name: "Untitled Circuit",
+  fileType: "py",
+  content: DEFAULT_CODE,
+  folderId: null,
+  isDirty: false,
+};
+
+/** Project a tab onto the legacy single-circuit mirror fields. */
+function projectTab(tab: OpenTab) {
+  return {
+    code: tab.content,
+    circuitName: tab.name,
+    circuitId: tab.fileId,
+    isDirty: tab.isDirty,
+    activeFileType: tab.fileType,
+  };
+}
+
+export const useCircuitStore = create<CircuitState>((set, get) => ({
+  // Editor defaults (mirror of the initial scratch tab)
   code: DEFAULT_CODE,
   circuitName: "Untitled Circuit",
   circuitId: null,
@@ -113,9 +181,30 @@ export const useCircuitStore = create<CircuitState>((set) => ({
   // Visualization
   circuitDiagram: null,
 
-  // Actions
-  setCode: (code) => set({ code, isDirty: true }),
-  setCircuitName: (circuitName) => set({ circuitName, isDirty: true }),
+  // Workspace (API-017)
+  tree: { folders: [], files: [] },
+  treeLoading: false,
+  openTabs: [SCRATCH_TAB],
+  activeKey: SCRATCH_TAB.key,
+  activeFileType: "py",
+
+  // Actions — setCode/setCircuitName also write through to the active tab.
+  setCode: (code) =>
+    set((s) => ({
+      code,
+      isDirty: true,
+      openTabs: s.openTabs.map((t) =>
+        t.key === s.activeKey ? { ...t, content: code, isDirty: true } : t,
+      ),
+    })),
+  setCircuitName: (circuitName) =>
+    set((s) => ({
+      circuitName,
+      isDirty: true,
+      openTabs: s.openTabs.map((t) =>
+        t.key === s.activeKey ? { ...t, name: circuitName, isDirty: true } : t,
+      ),
+    })),
   setCircuitId: (circuitId) => set({ circuitId }),
   setExecuting: (isExecuting) => set({ isExecuting }),
   setResult: (result) => set({ result, error: null }),
@@ -123,26 +212,146 @@ export const useCircuitStore = create<CircuitState>((set) => ({
   setSelectedBackend: (selectedBackend) => set({ selectedBackend }),
   setCircuitDiagram: (circuitDiagram) => set({ circuitDiagram }),
   resetCircuit: () =>
-    set({
-      code: DEFAULT_CODE,
-      circuitName: "Untitled Circuit",
-      circuitId: null,
-      isDirty: false,
-      forkedFrom: null,
-      result: null,
-      error: null,
-      circuitDiagram: null,
+    set((s) => {
+      const openTabs = s.openTabs.map((t) =>
+        t.key === s.activeKey
+          ? { ...t, name: "Untitled Circuit", content: DEFAULT_CODE, fileId: null, folderId: null, isDirty: false }
+          : t,
+      );
+      const active = openTabs.find((t) => t.key === s.activeKey) ?? SCRATCH_TAB;
+      return {
+        ...projectTab(active),
+        openTabs,
+        forkedFrom: null,
+        result: null,
+        error: null,
+        circuitDiagram: null,
+      };
     }),
   loadTemplate: (template) =>
-    set({
-      code: template.code,
-      circuitName: template.name,
-      circuitId: null,
-      isDirty: false,
-      forkedFrom: { id: template.id, name: template.name },
-      result: null,
-      error: null,
-      circuitDiagram: null,
+    set((s) => {
+      // Open the template as a fresh unsaved .py tab (first edit flips isDirty →
+      // STUDIO-014 anon-gate contract preserved).
+      const key = nextTabKey();
+      const tab: OpenTab = {
+        key,
+        fileId: null,
+        name: template.name,
+        fileType: "py",
+        content: template.code,
+        folderId: null,
+        isDirty: false,
+      };
+      return {
+        ...projectTab(tab),
+        openTabs: [...s.openTabs, tab],
+        activeKey: key,
+        forkedFrom: { id: template.id, name: template.name },
+        result: null,
+        error: null,
+        circuitDiagram: null,
+      };
+    }),
+
+  // ─── Workspace actions (API-017) ───
+  loadTree: async () => {
+    set({ treeLoading: true });
+    try {
+      const tree = await fetchWorkspaceTree();
+      set({ tree, treeLoading: false });
+    } catch {
+      set({ treeLoading: false });
+    }
+  },
+  openFileTab: async (fileId) => {
+    const existing = get().openTabs.find((t) => t.fileId === fileId);
+    if (existing) {
+      get().setActiveTab(existing.key);
+      return;
+    }
+    const f = await apiOpenFile(fileId);
+    set((s) => {
+      const tab: OpenTab = {
+        key: nextTabKey(),
+        fileId: f.id,
+        name: f.name,
+        fileType: f.file_type,
+        content: f.content ?? "",
+        folderId: f.folder_id,
+        isDirty: false,
+      };
+      return {
+        ...projectTab(tab),
+        openTabs: [...s.openTabs, tab],
+        activeKey: tab.key,
+        forkedFrom: null,
+        result: null,
+        error: null,
+        circuitDiagram: null,
+      };
+    });
+  },
+  openNewTab: (fileType, name, content = "") =>
+    set((s) => {
+      const key = nextTabKey();
+      const tab: OpenTab = {
+        key,
+        fileId: null,
+        name,
+        fileType,
+        content,
+        folderId: null,
+        isDirty: true,
+      };
+      return {
+        ...projectTab(tab),
+        openTabs: [...s.openTabs, tab],
+        activeKey: key,
+        forkedFrom: null,
+        result: null,
+        error: null,
+        circuitDiagram: null,
+      };
+    }),
+  setActiveTab: (key) =>
+    set((s) => {
+      const tab = s.openTabs.find((t) => t.key === key);
+      if (!tab) return {};
+      return { ...projectTab(tab), activeKey: key, result: null, error: null, circuitDiagram: null };
+    }),
+  closeTab: (key) =>
+    set((s) => {
+      const remaining = s.openTabs.filter((t) => t.key !== key);
+      if (s.activeKey !== key) return { openTabs: remaining };
+      const next = remaining[remaining.length - 1];
+      if (!next) {
+        return {
+          ...projectTab(SCRATCH_TAB),
+          openTabs: [SCRATCH_TAB],
+          activeKey: SCRATCH_TAB.key,
+          result: null,
+          error: null,
+          circuitDiagram: null,
+        };
+      }
+      return {
+        ...projectTab(next),
+        openTabs: remaining,
+        activeKey: next.key,
+        result: null,
+        error: null,
+        circuitDiagram: null,
+      };
+    }),
+  markActiveSaved: (file) =>
+    set((s) => {
+      const openTabs = s.openTabs.map((t) =>
+        t.key === s.activeKey
+          ? { ...t, fileId: file.id, name: file.name, folderId: file.folder_id, isDirty: false }
+          : t,
+      );
+      const active = openTabs.find((t) => t.key === s.activeKey) ?? SCRATCH_TAB;
+      return { ...projectTab(active), openTabs };
     }),
 }));
 
