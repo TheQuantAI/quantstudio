@@ -27,15 +27,15 @@ import {
   BarChart3,
   Terminal,
   Save,
-  FolderOpen,
-  Trash2,
   Check,
   PieChart,
   Info,
 } from "lucide-react";
 import { useCallback, useRef, useState, useEffect } from "react";
 import { useAuth } from "@/components/auth-provider";
-import { runCircuit, submitCircuitToQPU, pollQPUResult, saveCircuit, updateCircuit, listCircuits, deleteCircuit, type CircuitResponse } from "@/lib/api";
+import { runCircuit, submitCircuitToQPU, pollQPUResult, saveFile } from "@/lib/api";
+import { WorkspaceExplorer } from "@/components/workspace/explorer";
+import { EditorTabs } from "@/components/workspace/editor-tabs";
 import { isQPUBackend } from "@/lib/cloud-api";
 import { AuthGateModal } from "@/components/auth-gate-modal";
 import { track } from "@/lib/analytics";
@@ -93,6 +93,8 @@ export default function StudioPage() {
     error,
     selectedBackend,
     circuitDiagram,
+    activeFileType,
+    openTabs,
     setCode,
     setCircuitName,
     setExecuting,
@@ -154,11 +156,14 @@ export default function StudioPage() {
     const metadata = pending.forkedFrom
       ? { forked_from: pending.forkedFrom.id, forked_from_name: pending.forkedFrom.name }
       : undefined;
-    saveCircuit(pending.name, pending.code, "", user.id, metadata)
+    const fileName = pending.name.toLowerCase().endsWith(".py")
+      ? pending.name
+      : `${pending.name}.py`;
+    saveFile({ fileId: null, name: fileName, fileType: "py", content: pending.code, metadata })
       .then((saved) => {
-        useCircuitStore.getState().setCircuitId(saved.id);
-        useCircuitStore.setState({ isDirty: false });
-        addLog("success", `Saved "${pending.name}" to your circuits.`);
+        useCircuitStore.getState().markActiveSaved(saved);
+        void useCircuitStore.getState().loadTree();
+        addLog("success", `Saved "${saved.name}" to your workspace.`);
       })
       .catch(() => setError("Could not save your circuit — it's still in the editor."));
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -168,6 +173,18 @@ export default function StudioPage() {
   useEffect(() => {
     fetchBackends();
   }, [fetchBackends]);
+
+  // API-017 (AC6): warn before leaving if any open tab has unsaved changes.
+  const hasUnsavedTabs = openTabs.some((t) => t.isDirty);
+  useEffect(() => {
+    if (!hasUnsavedTabs) return;
+    const onBeforeUnload = (e: BeforeUnloadEvent) => {
+      e.preventDefault();
+      e.returnValue = "";
+    };
+    window.addEventListener("beforeunload", onBeforeUnload);
+    return () => window.removeEventListener("beforeunload", onBeforeUnload);
+  }, [hasUnsavedTabs]);
 
   // Merge the user's own IBM devices once authenticated (API-016)
   const { fetchIBMBackends } = useBackendStore();
@@ -212,34 +229,16 @@ export default function StudioPage() {
   }, [consoleLog]);
 
   // Save/Load state
-  const [showMyCircuits, setShowMyCircuits] = useState(false);
-  const [savedCircuits, setSavedCircuits] = useState<CircuitResponse[]>([]);
   const [isSaving, setIsSaving] = useState(false);
   const [saveSuccess, setSaveSuccess] = useState(false);
-  const [loadingCircuits, setLoadingCircuits] = useState(false);
+  // Explorer selection: where a new file / Save lands (null = root).
+  const [selectedFolderId, setSelectedFolderId] = useState<string | null>(null);
 
-  const userId = user?.id || "anonymous";
   const currentBackend = backends.find((b) => b.id === selectedBackend);
 
-  // Load user's circuits when My Circuits dropdown opens
-  const handleOpenMyCircuits = useCallback(async () => {
-    if (showMyCircuits) {
-      setShowMyCircuits(false);
-      return;
-    }
-    setShowMyCircuits(true);
-    setLoadingCircuits(true);
-    try {
-      const circuits = await listCircuits(userId);
-      setSavedCircuits(circuits);
-    } catch {
-      setSavedCircuits([]);
-    } finally {
-      setLoadingCircuits(false);
-    }
-  }, [showMyCircuits, userId]);
-
-  // Save current circuit
+  // Save the active tab into the workspace (API-017). New files land in the
+  // explorer-selected folder (or the active tab's folder / root); existing files
+  // update in place. The name carries a .py extension for runnable circuits.
   const handleSave = useCallback(async () => {
     // STUDIO-014: anonymous users must sign in before saving.
     if (!user) {
@@ -248,75 +247,53 @@ export default function StudioPage() {
     }
     // STUDIO-016: unconfirmed users can't persist to their account yet.
     if (blockedUnconfirmed) {
-      setError("Confirm your email to save circuits to your account.");
+      setError("Confirm your email to save to your workspace.");
       return;
     }
     setIsSaving(true);
     setSaveSuccess(false);
     try {
-      const { circuitId, forkedFrom: fork } = useCircuitStore.getState();
-      if (circuitId) {
-        // Update existing
-        await updateCircuit(circuitId, { name: circuitName, code });
-      } else {
-        // Create new — carry template provenance if this was forked.
-        const metadata = fork
+      const store = useCircuitStore.getState();
+      const active = store.openTabs.find((t) => t.key === store.activeKey);
+      const fileType = active?.fileType ?? "py";
+      let name = circuitName.trim() || "Untitled";
+      if (!name.toLowerCase().endsWith(`.${fileType}`)) name = `${name}.${fileType}`;
+      const defaultFolder = store.tree.folders.find((f) => f.is_default)?.id ?? null;
+      const targetFolder =
+        active?.fileId != null
+          ? (active.folderId ?? null) // existing file: keep its folder
+          : (active?.folderId ?? selectedFolderId ?? defaultFolder);
+      const fork = store.forkedFrom;
+      const metadata =
+        active?.fileId == null && fork
           ? { forked_from: fork.id, forked_from_name: fork.name }
           : undefined;
-        const saved = await saveCircuit(circuitName, code, "", userId, metadata);
-        useCircuitStore.getState().setCircuitId(saved.id);
-      }
+      const saved = await saveFile({
+        fileId: active?.fileId ?? null,
+        name,
+        fileType,
+        content: code,
+        folderId: targetFolder,
+        metadata,
+      });
+      useCircuitStore.getState().markActiveSaved(saved);
+      await useCircuitStore.getState().loadTree();
       setSaveSuccess(true);
-      useCircuitStore.setState({ isDirty: false });
       setTimeout(() => setSaveSuccess(false), 2000);
-    } catch {
-      setError("Failed to save circuit");
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Failed to save file");
     } finally {
       setIsSaving(false);
     }
-  }, [circuitName, code, userId, user, blockedUnconfirmed, setError]);
-
-  // Load a saved circuit
-  const handleLoadCircuit = useCallback(
-    (circuit: CircuitResponse) => {
-      setCode(circuit.code);
-      setCircuitName(circuit.name);
-      useCircuitStore.getState().setCircuitId(circuit.id);
-      useCircuitStore.setState({ isDirty: false });
-      setResult(null);
-      setError(null);
-      setCircuitDiagram(null);
-      setShowMyCircuits(false);
-    },
-    [setCode, setCircuitName, setResult, setError, setCircuitDiagram]
-  );
-
-  // Delete a saved circuit
-  const handleDeleteCircuit = useCallback(
-    async (e: React.MouseEvent, circuitId: string) => {
-      e.stopPropagation();
-      try {
-        await deleteCircuit(circuitId);
-        setSavedCircuits((prev) => prev.filter((c) => c.id !== circuitId));
-        // If we deleted the active circuit, clear circuitId
-        if (useCircuitStore.getState().circuitId === circuitId) {
-          useCircuitStore.getState().setCircuitId(null);
-        }
-      } catch {
-        // silently fail
-      }
-    },
-    []
-  );
+  }, [circuitName, code, user, blockedUnconfirmed, selectedFolderId, setError]);
 
   // Close dropdowns on outside click
   useEffect(() => {
     const handleClick = () => {
       setShowTemplates(false);
       setShowBackendSelect(false);
-      setShowMyCircuits(false);
     };
-    const anyOpen = showTemplates || showBackendSelect || showMyCircuits;
+    const anyOpen = showTemplates || showBackendSelect;
     if (anyOpen) {
       // Delay to avoid closing on the button click itself
       const id = setTimeout(() => {
@@ -327,7 +304,7 @@ export default function StudioPage() {
         document.removeEventListener("click", handleClick);
       };
     }
-  }, [showTemplates, showBackendSelect, showMyCircuits]);
+  }, [showTemplates, showBackendSelect]);
 
   // Configure Monaco editor
   const handleEditorDidMount = useCallback(
@@ -703,14 +680,14 @@ export default function StudioPage() {
           )}
         </div>
 
-        {/* Save / My Circuits / Action buttons */}
+        {/* Save (persists the active tab into the workspace explorer) */}
         <Button
           variant="outline"
           size="sm"
           className="gap-1.5"
           onClick={handleSave}
           disabled={isSaving}
-          title="Save circuit"
+          title="Save to workspace"
         >
           {isSaving ? (
             <Loader2 className="h-3.5 w-3.5 animate-spin" />
@@ -721,70 +698,6 @@ export default function StudioPage() {
           )}
           <span className="hidden sm:inline">{saveSuccess ? "Saved!" : "Save"}</span>
         </Button>
-
-        <div className="relative">
-          <Button
-            variant="outline"
-            size="sm"
-            className="gap-1"
-            onClick={handleOpenMyCircuits}
-          >
-            <FolderOpen className="h-3.5 w-3.5" />
-            <span className="hidden sm:inline">My Circuits</span>
-            <ChevronDown className="h-3 w-3" />
-          </Button>
-          {showMyCircuits && (
-            <div
-              className="absolute top-full right-0 mt-1 w-80 bg-card border border-border rounded-lg shadow-lg z-50 py-1"
-              onClick={(e) => e.stopPropagation()}
-            >
-              <div className="px-3 py-2 border-b border-border">
-                <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide">
-                  Saved Circuits
-                  {user ? "" : " (sign in to persist)"}
-                </p>
-              </div>
-              {loadingCircuits ? (
-                <div className="flex items-center justify-center py-6">
-                  <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
-                </div>
-              ) : savedCircuits.length === 0 ? (
-                <div className="px-3 py-6 text-center text-sm text-muted-foreground">
-                  No saved circuits yet.
-                  <br />
-                  Click <strong>Save</strong> to store your work.
-                </div>
-              ) : (
-                <div className="max-h-64 overflow-y-auto">
-                  {savedCircuits.map((circuit) => (
-                    <button
-                      key={circuit.id}
-                      className="w-full text-left px-3 py-2 hover:bg-accent transition-colors flex items-center justify-between group"
-                      onClick={() => handleLoadCircuit(circuit)}
-                    >
-                      <div className="min-w-0 flex-1">
-                        <div className="text-sm font-medium truncate">
-                          {circuit.name}
-                        </div>
-                        <div className="text-xs text-muted-foreground">
-                          {new Date(circuit.updated_at).toLocaleDateString()} ·{" "}
-                          {circuit.code.split("\n").length} lines
-                        </div>
-                      </div>
-                      <button
-                        className="opacity-0 group-hover:opacity-100 transition-opacity p-1 rounded hover:bg-destructive/10 text-muted-foreground hover:text-destructive"
-                        onClick={(e) => handleDeleteCircuit(e, circuit.id)}
-                        title="Delete circuit"
-                      >
-                        <Trash2 className="h-3.5 w-3.5" />
-                      </button>
-                    </button>
-                  ))}
-                </div>
-              )}
-            </div>
-          )}
-        </div>
 
         <div className="w-px h-6 bg-border mx-1" />
 
@@ -808,7 +721,10 @@ export default function StudioPage() {
           size="sm"
           className="gap-1.5 ml-2"
           onClick={handleRun}
-          disabled={isExecuting || submittingQPU || qpuPending !== null}
+          disabled={
+            isExecuting || submittingQPU || qpuPending !== null || activeFileType !== "py"
+          }
+          title={activeFileType !== "py" ? "Only .py files can be run" : "Run circuit"}
         >
           {isExecuting || submittingQPU || qpuPending ? (
             <>
@@ -824,10 +740,19 @@ export default function StudioPage() {
         </Button>
       </div>
 
-      {/* Main content: Editor + Results */}
+      {/* Main content: Explorer + Editor + Results */}
       <div className="flex flex-1 overflow-hidden">
+        {/* Workspace explorer (authenticated only — API-017) */}
+        {user && !blockedUnconfirmed && (
+          <WorkspaceExplorer
+            selectedFolderId={selectedFolderId}
+            onSelectFolder={setSelectedFolderId}
+          />
+        )}
         {/* Editor + Terminal pane */}
         <div className="flex-1 min-w-0 flex flex-col">
+          {/* Open-file tabs (authenticated only) */}
+          {user && !blockedUnconfirmed && <EditorTabs />}
           {/* Code editor */}
           <div className="flex-1 min-h-0">
           <MonacoEditor

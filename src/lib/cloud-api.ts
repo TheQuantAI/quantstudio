@@ -403,6 +403,139 @@ export async function cloudDeleteCircuit(
   await cloudFetch(`/circuits/${id}`, { method: "DELETE" }, token);
 }
 
+// ─── Workspace: folders + files (API-017, requires auth) ────────
+
+export type FileType = "py" | "qasm" | "md" | "json" | "csv";
+
+export interface CloudFolder {
+  id: string;
+  user_id: string;
+  parent_id: string | null;
+  name: string;
+  is_default: boolean;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface CloudFile {
+  id: string;
+  user_id: string;
+  folder_id: string | null;
+  name: string;
+  file_type: FileType;
+  content: string | null; // null in the tree; present on GET /files/{id}
+  num_qubits: number | null;
+  metadata: Record<string, unknown>;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface CloudWorkspaceTree {
+  folders: CloudFolder[];
+  files: CloudFile[];
+}
+
+export async function cloudGetWorkspaceTree(
+  token?: string
+): Promise<CloudWorkspaceTree> {
+  const res = await cloudFetch("/workspace/tree", { method: "GET" }, token);
+  return res.json();
+}
+
+export async function cloudCreateFolder(
+  params: { name: string; parent_id?: string | null },
+  token?: string
+): Promise<CloudFolder> {
+  const res = await cloudFetch(
+    "/folders",
+    { method: "POST", body: JSON.stringify(params) },
+    token
+  );
+  return res.json();
+}
+
+export async function cloudUpdateFolder(
+  id: string,
+  updates: { name?: string; parent_id?: string | null },
+  token?: string
+): Promise<CloudFolder> {
+  const res = await cloudFetch(
+    `/folders/${id}`,
+    { method: "PATCH", body: JSON.stringify(updates) },
+    token
+  );
+  return res.json();
+}
+
+export async function cloudDeleteFolder(
+  id: string,
+  token?: string
+): Promise<void> {
+  await cloudFetch(`/folders/${id}`, { method: "DELETE" }, token);
+}
+
+/** Files (with content) directly inside a folder — for client-side zip export. */
+export async function cloudDownloadFolder(
+  id: string,
+  token?: string
+): Promise<CloudFile[]> {
+  const res = await cloudFetch(`/folders/${id}/download`, { method: "GET" }, token);
+  return res.json();
+}
+
+export async function cloudCreateFile(
+  params: {
+    name: string;
+    file_type: FileType;
+    folder_id?: string | null;
+    content?: string;
+    num_qubits?: number | null;
+    metadata?: Record<string, unknown>;
+  },
+  token?: string
+): Promise<CloudFile> {
+  const res = await cloudFetch(
+    "/files",
+    { method: "POST", body: JSON.stringify(params) },
+    token
+  );
+  return res.json();
+}
+
+export async function cloudGetFile(
+  id: string,
+  token?: string
+): Promise<CloudFile> {
+  const res = await cloudFetch(`/files/${id}`, { method: "GET" }, token);
+  return res.json();
+}
+
+export async function cloudUpdateFile(
+  id: string,
+  updates: {
+    name?: string;
+    content?: string;
+    folder_id?: string | null;
+    num_qubits?: number | null;
+    metadata?: Record<string, unknown>;
+  },
+  token?: string
+): Promise<CloudFile> {
+  const res = await cloudFetch(
+    `/files/${id}`,
+    { method: "PATCH", body: JSON.stringify(updates) },
+    token
+  );
+  return res.json();
+}
+
+export async function cloudDeleteFile(
+  id: string,
+  token?: string
+): Promise<void> {
+  await cloudFetch(`/files/${id}`, { method: "DELETE" }, token);
+}
+
 // ─── Jobs (requires auth) ──────────────────────────────────────
 
 export async function cloudListJobs(

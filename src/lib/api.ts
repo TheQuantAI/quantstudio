@@ -11,9 +11,22 @@ import {
   cloudUpdateCircuit,
   cloudDeleteCircuit,
   cloudSubmitCircuit,
+  cloudGetWorkspaceTree,
+  cloudCreateFolder,
+  cloudUpdateFolder,
+  cloudDeleteFolder,
+  cloudDownloadFolder,
+  cloudCreateFile,
+  cloudGetFile,
+  cloudUpdateFile,
+  cloudDeleteFile,
   isCloudAuthenticated,
   getAuthToken,
   type CloudBackendInfo,
+  type CloudFolder,
+  type CloudFile,
+  type CloudWorkspaceTree,
+  type FileType,
 } from "./cloud-api";
 import { track } from "./analytics";
 
@@ -439,6 +452,156 @@ export async function deleteCircuit(id: string): Promise<void> {
 
   const circuits = getLocalCircuits().filter((c) => c.id !== id);
   setLocalCircuits(circuits);
+}
+
+// ─── Workspace: folders + files (API-017) ──────────────────────
+// Authenticated-only. Unlike the circuit facade above, these SURFACE errors
+// (no silent localStorage fallback) — the explorer only renders when signed in.
+
+export type {
+  CloudFolder,
+  CloudFile,
+  CloudWorkspaceTree,
+  FileType,
+} from "./cloud-api";
+
+function requireAuth(): void {
+  if (!isCloudAuthenticated()) {
+    throw new Error("Sign in to use your workspace.");
+  }
+}
+
+export async function fetchWorkspaceTree(): Promise<CloudWorkspaceTree> {
+  requireAuth();
+  return cloudGetWorkspaceTree();
+}
+
+export async function createFolder(
+  name: string,
+  parentId: string | null = null,
+): Promise<CloudFolder> {
+  requireAuth();
+  return cloudCreateFolder({ name, parent_id: parentId });
+}
+
+export async function renameFolder(id: string, name: string): Promise<CloudFolder> {
+  requireAuth();
+  return cloudUpdateFolder(id, { name });
+}
+
+export async function moveFolder(
+  id: string,
+  parentId: string | null,
+): Promise<CloudFolder> {
+  requireAuth();
+  return cloudUpdateFolder(id, { parent_id: parentId });
+}
+
+export async function deleteFolder(id: string): Promise<void> {
+  requireAuth();
+  return cloudDeleteFolder(id);
+}
+
+export async function createFile(params: {
+  name: string;
+  fileType: FileType;
+  folderId?: string | null;
+  content?: string;
+  numQubits?: number | null;
+  metadata?: Record<string, unknown>;
+}): Promise<CloudFile> {
+  requireAuth();
+  return cloudCreateFile({
+    name: params.name,
+    file_type: params.fileType,
+    folder_id: params.folderId ?? null,
+    content: params.content ?? "",
+    num_qubits: params.numQubits ?? null,
+    metadata: params.metadata,
+  });
+}
+
+export async function openFile(id: string): Promise<CloudFile> {
+  requireAuth();
+  return cloudGetFile(id);
+}
+
+/** Persist a tab: create when it has no fileId yet, otherwise patch its content. */
+export async function saveFile(params: {
+  fileId: string | null;
+  name: string;
+  fileType: FileType;
+  content: string;
+  folderId?: string | null;
+  numQubits?: number | null;
+  metadata?: Record<string, unknown>;
+}): Promise<CloudFile> {
+  requireAuth();
+  if (params.fileId === null) {
+    return createFile({
+      name: params.name,
+      fileType: params.fileType,
+      folderId: params.folderId ?? null,
+      content: params.content,
+      numQubits: params.numQubits ?? null,
+      metadata: params.metadata,
+    });
+  }
+  return cloudUpdateFile(params.fileId, {
+    name: params.name, // persist toolbar renames of an existing file
+    content: params.content,
+    num_qubits: params.numQubits ?? null,
+    metadata: params.metadata,
+  });
+}
+
+export async function renameFile(id: string, name: string): Promise<CloudFile> {
+  requireAuth();
+  return cloudUpdateFile(id, { name });
+}
+
+export async function moveFile(
+  id: string,
+  folderId: string | null,
+): Promise<CloudFile> {
+  requireAuth();
+  return cloudUpdateFile(id, { folder_id: folderId });
+}
+
+export async function deleteFile(id: string): Promise<void> {
+  requireAuth();
+  return cloudDeleteFile(id);
+}
+
+/** Trigger a browser download of a single file's content. */
+export function downloadFile(name: string, content: string): void {
+  if (typeof window === "undefined") return;
+  const blob = new Blob([content], { type: "text/plain;charset=utf-8" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = name;
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
+/** Zip every file in a folder (client-side, via jszip) and download it. */
+export async function downloadFolder(id: string, folderName: string): Promise<void> {
+  requireAuth();
+  const files = await cloudDownloadFolder(id);
+  const { default: JSZip } = await import("jszip");
+  const zip = new JSZip();
+  for (const f of files) {
+    zip.file(f.name, f.content ?? "");
+  }
+  const blob = await zip.generateAsync({ type: "blob" });
+  if (typeof window === "undefined") return;
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = `${folderName || "folder"}.zip`;
+  a.click();
+  URL.revokeObjectURL(url);
 }
 
 // Re-export for convenience
