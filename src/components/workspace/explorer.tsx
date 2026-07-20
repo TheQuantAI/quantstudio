@@ -15,6 +15,7 @@ import {
   Folder,
   FolderPlus,
   Loader2,
+  PanelLeftClose,
   Pencil,
   Search,
   Trash2,
@@ -43,9 +44,12 @@ const DRAG_MIME = "application/x-tqc-node";
 export function WorkspaceExplorer({
   selectedFolderId,
   onSelectFolder,
+  onCollapse,
 }: {
   selectedFolderId: string | null;
   onSelectFolder: (id: string | null) => void;
+  /** Optional: renders a collapse button in the header when provided. */
+  onCollapse?: () => void;
 }) {
   const tree = useCircuitStore((s) => s.tree);
   const treeLoading = useCircuitStore((s) => s.treeLoading);
@@ -297,7 +301,7 @@ export function WorkspaceExplorer({
     : [];
 
   return (
-    <div className="flex h-full w-60 shrink-0 flex-col border-r border-border bg-card">
+    <div className="flex h-full min-h-0 w-60 shrink-0 flex-col border-r border-border bg-card">
       {/* Header */}
       <div className="flex items-center justify-between border-b border-border px-2 py-1.5">
         <span className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
@@ -311,6 +315,11 @@ export function WorkspaceExplorer({
           <IconBtn title="New folder" onClick={() => void handleNewFolder(selectedFolderId)}>
             <FolderPlus className="h-4 w-4" />
           </IconBtn>
+          {onCollapse && (
+            <IconBtn title="Hide workspace" onClick={onCollapse}>
+              <PanelLeftClose className="h-4 w-4" />
+            </IconBtn>
+          )}
         </span>
       </div>
 
@@ -325,9 +334,11 @@ export function WorkspaceExplorer({
         />
       </div>
 
-      {/* Tree / results */}
+      {/* Tree / results. min-h-0 is required here: without it, a flex child
+          defaults to min-height:auto and grows to fit all files instead of
+          scrolling once the list is taller than the sidebar. */}
       <div
-        className={`flex-1 overflow-y-auto p-1 ${dragOver === "root" ? "ring-1 ring-inset ring-quantum" : ""}`}
+        className={`min-h-0 flex-1 overflow-y-auto p-1 ${dragOver === "root" ? "ring-1 ring-inset ring-quantum" : ""}`}
         onDragOver={(e) => {
           e.preventDefault();
           setDragOver("root");

@@ -22,6 +22,7 @@ import {
   FileCode2,
   ChevronDown,
   ChevronUp,
+  PanelLeft,
   Server,
   Loader2,
   BarChart3,
@@ -233,6 +234,8 @@ export default function StudioPage() {
   const [saveSuccess, setSaveSuccess] = useState(false);
   // Explorer selection: where a new file / Save lands (null = root).
   const [selectedFolderId, setSelectedFolderId] = useState<string | null>(null);
+  // Collapse the workspace rail to give the editor more room.
+  const [explorerCollapsed, setExplorerCollapsed] = useState(false);
 
   const currentBackend = backends.find((b) => b.id === selectedBackend);
 
@@ -286,6 +289,20 @@ export default function StudioPage() {
       setIsSaving(false);
     }
   }, [circuitName, code, user, blockedUnconfirmed, selectedFolderId, setError]);
+
+  // Ctrl/Cmd+S saves the active tab instead of triggering the browser's
+  // "Save Page As" dialog. Global (not Monaco-only) so it works regardless of
+  // which part of the Studio UI has focus (explorer, tabs, editor, toolbar).
+  useEffect(() => {
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (!(e.metaKey || e.ctrlKey) || e.key.toLowerCase() !== "s") return;
+      e.preventDefault();
+      if (e.repeat) return;
+      void handleSave();
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [handleSave]);
 
   // Close dropdowns on outside click
   useEffect(() => {
@@ -742,12 +759,26 @@ export default function StudioPage() {
 
       {/* Main content: Explorer + Editor + Results */}
       <div className="flex flex-1 overflow-hidden">
-        {/* Workspace explorer (authenticated only — API-017) */}
+        {/* Workspace explorer (authenticated only — API-017); collapsible for more editor room */}
         {user && !blockedUnconfirmed && (
-          <WorkspaceExplorer
-            selectedFolderId={selectedFolderId}
-            onSelectFolder={setSelectedFolderId}
-          />
+          explorerCollapsed ? (
+            <div className="flex w-8 shrink-0 flex-col items-center border-r border-border bg-card py-2">
+              <button
+                onClick={() => setExplorerCollapsed(false)}
+                title="Show workspace"
+                aria-label="Show workspace"
+                className="rounded p-1 text-muted-foreground hover:bg-accent hover:text-foreground"
+              >
+                <PanelLeft className="h-4 w-4" />
+              </button>
+            </div>
+          ) : (
+            <WorkspaceExplorer
+              selectedFolderId={selectedFolderId}
+              onSelectFolder={setSelectedFolderId}
+              onCollapse={() => setExplorerCollapsed(true)}
+            />
+          )
         )}
         {/* Editor + Terminal pane */}
         <div className="flex-1 min-w-0 flex flex-col">
@@ -881,7 +912,11 @@ export default function StudioPage() {
                               ? "text-green-400"
                               : entry.type === "warn"
                               ? "text-yellow-400"
-                              : "text-foreground/80"
+                              // This panel's background is a fixed dark (#0d1117)
+                              // regardless of site theme, so "info" needs a fixed
+                              // light color too — text-foreground is theme-aware
+                              // and turns near-invisible in light mode.
+                              : "text-gray-300"
                           }
                         >
                           {entry.message}
