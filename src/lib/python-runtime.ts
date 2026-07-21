@@ -63,6 +63,16 @@ export function isPyodideReady(): boolean {
   return pyodideInstance !== null;
 }
 
+/**
+ * Cheap static check: does this code plausibly define a circuit? (STUDIO-018)
+ * Drives the Run button's circuit-vs-script auto-detect; the cloud path's
+ * "No circuit found" error remains the authoritative backstop for
+ * false positives (e.g. `Circuit(` only in a comment).
+ */
+export function looksLikeCircuit(code: string): boolean {
+  return /\bCircuit\s*\(/.test(code);
+}
+
 /** Output callback type */
 export type OutputCallback = (text: string, stream: "stdout" | "stderr") => void;
 

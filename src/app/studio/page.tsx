@@ -32,12 +32,15 @@ import {
   PieChart,
   Info,
 } from "lucide-react";
-import { useCallback, useRef, useState, useEffect } from "react";
+import { useCallback, useMemo, useRef, useState, useEffect } from "react";
 import { useAuth } from "@/components/auth-provider";
 import { runCircuit, submitCircuitToQPU, pollQPUResult, saveFile } from "@/lib/api";
 import { WorkspaceExplorer } from "@/components/workspace/explorer";
 import { EditorTabs } from "@/components/workspace/editor-tabs";
-import { isQPUBackend } from "@/lib/cloud-api";
+import { isQPUBackend, type FileType } from "@/lib/cloud-api";
+import { looksLikeCircuit } from "@/lib/python-runtime";
+import { syncWorkspaceFS } from "@/lib/workspace-fs";
+import { QASM_LANGUAGE_ID, QASM_MONARCH } from "@/lib/qasm-language";
 import { AuthGateModal } from "@/components/auth-gate-modal";
 import { track } from "@/lib/analytics";
 import { stashPendingCircuit, popPendingCircuit } from "@/lib/pending-circuit";
@@ -69,6 +72,22 @@ const PythonTerminal = dynamic(() => import("@/components/python-terminal"), {
   ),
 });
 
+// STUDIO-018: per-type editor language + rendered views for md/csv tabs.
+const EDITOR_LANGUAGE: Record<FileType, string> = {
+  py: "python",
+  qasm: QASM_LANGUAGE_ID,
+  md: "markdown",
+  json: "json",
+  csv: "plaintext",
+};
+
+const MarkdownPreview = dynamic(() => import("@/components/workspace/markdown-preview"), {
+  ssr: false,
+});
+const CsvGrid = dynamic(() => import("@/components/workspace/csv-grid"), { ssr: false });
+
+type EditorView = "code" | "preview" | "grid";
+
 // Right panel tab types
 type RightPanelTab = "results" | "probabilities" | "circuit" | "stats";
 
@@ -95,6 +114,7 @@ export default function StudioPage() {
     selectedBackend,
     circuitDiagram,
     activeFileType,
+    activeKey,
     openTabs,
     setCode,
     setCircuitName,
@@ -237,6 +257,18 @@ export default function StudioPage() {
   // Collapse the workspace rail to give the editor more room.
   const [explorerCollapsed, setExplorerCollapsed] = useState(false);
 
+  // STUDIO-018: editor view per tab — csv opens as an editable grid, md offers
+  // a rendered preview; both always have the raw code view available.
+  const [editorView, setEditorView] = useState<EditorView>("code");
+  useEffect(() => {
+    setEditorView(activeFileType === "csv" ? "grid" : "code");
+  }, [activeKey, activeFileType]);
+
+  // STUDIO-018: does the active .py define a circuit (cloud path) or is it a
+  // plain script (local Pyodide run)? Static check; the cloud compile error is
+  // the backstop for false positives.
+  const isCircuitCode = useMemo(() => looksLikeCircuit(code), [code]);
+
   const currentBackend = backends.find((b) => b.id === selectedBackend);
 
   // Save the active tab into the workspace (API-017). New files land in the
@@ -331,6 +363,8 @@ export default function StudioPage() {
 
       const m = monaco as {
         languages: {
+          register: (lang: { id: string }) => void;
+          setMonarchTokensProvider: (id: string, def: unknown) => void;
           typescript?: {
             pythonDefaults?: {
               addExtraLib: (content: string, filePath?: string) => void;
@@ -360,6 +394,14 @@ export default function StudioPage() {
           setModelMarkers: unknown;
         };
       };
+
+      // STUDIO-018: minimal OpenQASM highlighting for .qasm tabs.
+      try {
+        m.languages.register({ id: QASM_LANGUAGE_ID });
+        m.languages.setMonarchTokensProvider(QASM_LANGUAGE_ID, QASM_MONARCH);
+      } catch {
+        // Already registered (fast refresh) — safe to ignore.
+      }
 
       // Register QuantSDK type definitions for richer IntelliSense
       // (Type defs provide hover info and parameter hints)
@@ -403,6 +445,48 @@ export default function StudioPage() {
     []
   );
 
+  // STUDIO-018: wait for the terminal to mount + Pyodide to load (it renders
+  // only while the panel is open; first load is slow).
+  const waitForTerminal = useCallback(async (timeoutMs = 20000): Promise<PythonTerminalHandle | null> => {
+    const start = Date.now();
+    while (Date.now() - start < timeoutMs) {
+      const t = terminalRef.current;
+      if (t?.isReady()) return t;
+      await new Promise((r) => setTimeout(r, 200));
+    }
+    return null;
+  }, []);
+
+  // STUDIO-018: run a plain (non-circuit) .py file locally in Pyodide, output
+  // in the terminal — with a Console fallback if the terminal can't come up.
+  const runScriptLocally = useCallback(
+    async (codeToRun: string) => {
+      setExecuting(true);
+      setError(null);
+      setTerminalOpen(true);
+      setBottomTab("terminal");
+      addLog("info", "No circuit detected — running this file as a Python script locally (browser Pyodide).");
+      try {
+        const term = await waitForTerminal();
+        if (term) {
+          await term.runCode(codeToRun, "script");
+        } else {
+          setBottomTab("output");
+          addLog("warn", "Terminal didn't come up — streaming script output here instead.");
+          const { executePython } = await import("@/lib/python-runtime");
+          await executePython(codeToRun, (text, stream) =>
+            addLog(stream === "stderr" ? "error" : "info", text),
+          );
+        }
+      } catch (err) {
+        addLog("error", err instanceof Error ? err.message : "Script execution failed.");
+      } finally {
+        setExecuting(false);
+      }
+    },
+    [addLog, setError, setExecuting, waitForTerminal],
+  );
+
   // Execute circuit via FastAPI backend
   const handleRun = useCallback(async () => {
     // STUDIO-016: block cloud runs for unconfirmed users; browser sim stays open.
@@ -410,6 +494,39 @@ export default function StudioPage() {
       setBottomTab("terminal");
       setTerminalOpen(true);
       addLog("error", "Confirm your email to run on the cloud. You can still use the browser simulator.");
+      return;
+    }
+
+    // STUDIO-018: circuit-vs-script auto-detect for .py files.
+    const isScript = activeFileType === "py" && !looksLikeCircuit(code);
+    if (isScript && isQPUBackend(selectedBackend)) {
+      const msg =
+        "No circuit in this file — it can run locally as a script, but not on a QPU. Define a qs.Circuit(...) or pick a simulator.";
+      setBottomTab("output");
+      setTerminalOpen(true);
+      addLog("error", msg);
+      setError(msg);
+      return;
+    }
+
+    // STUDIO-018: mirror the workspace into Pyodide's FS so this run (script,
+    // or a circuit whose code reads data files) can open() workspace files.
+    if (user && !blockedUnconfirmed) {
+      try {
+        const st = useCircuitStore.getState();
+        const report = await syncWorkspaceFS({
+          tree: st.tree,
+          openTabs: st.openTabs,
+          activeFolderId: selectedFolderId,
+        });
+        for (const w of report.warnings) addLog("warn", w);
+      } catch {
+        addLog("warn", "Workspace files could not be prepared — reading them from this run may fail.");
+      }
+    }
+
+    if (isScript) {
+      await runScriptLocally(code);
       return;
     }
     // Real hardware (API-016): submit-only — IBM queues take minutes to hours,
@@ -531,26 +648,39 @@ export default function StudioPage() {
       const msg = err instanceof Error
         ? err.message
         : "Execution failed. Please check your circuit code.";
+      // STUDIO-018: static-check false positive (e.g. `Circuit(` in a comment) —
+      // the compile says there's no circuit, so run the file as a script instead.
+      if (msg.includes("No circuit found")) {
+        setExecuting(false);
+        await runScriptLocally(code);
+        return;
+      }
       addLog("error", msg);
       setError(msg);
     } finally {
       setExecuting(false);
     }
-  }, [code, circuitName, selectedBackend, blockedUnconfirmed, setExecuting, setResult, setError, setCircuitDiagram, addLog, terminalOpen, setBottomTab, setTerminalOpen]);
+  }, [code, circuitName, selectedBackend, blockedUnconfirmed, user, activeFileType, selectedFolderId, runScriptLocally, setExecuting, setResult, setError, setCircuitDiagram, addLog, terminalOpen, setBottomTab, setTerminalOpen]);
 
   const handleCopyCode = useCallback(() => {
     navigator.clipboard.writeText(code);
   }, [code]);
 
   const handleDownload = useCallback(() => {
-    const blob = new Blob([code], { type: "text/python" });
+    // STUDIO-018: keep the active tab's real extension (was hardcoded .py,
+    // which downloaded notes.md as notes.md.py).
+    let name = circuitName.trim() || "untitled";
+    if (!name.toLowerCase().endsWith(`.${activeFileType}`)) {
+      name = `${name.replace(/\s+/g, "_").toLowerCase()}.${activeFileType}`;
+    }
+    const blob = new Blob([code], { type: "text/plain;charset=utf-8" });
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
     a.href = url;
-    a.download = `${circuitName.replace(/\s+/g, "_").toLowerCase()}.py`;
+    a.download = name;
     a.click();
     URL.revokeObjectURL(url);
-  }, [code, circuitName]);
+  }, [code, circuitName, activeFileType]);
 
   return (
     <div className="flex flex-col h-[calc(100vh-3.5rem)]">
@@ -722,7 +852,7 @@ export default function StudioPage() {
         <Button variant="ghost" size="icon" onClick={handleCopyCode} title="Copy code">
           <Copy className="h-4 w-4" />
         </Button>
-        <Button variant="ghost" size="icon" onClick={handleDownload} title="Download .py">
+        <Button variant="ghost" size="icon" onClick={handleDownload} title="Download file">
           <Download className="h-4 w-4" />
         </Button>
         <Button
@@ -742,7 +872,13 @@ export default function StudioPage() {
           disabled={
             isExecuting || submittingQPU || qpuPending !== null || activeFileType !== "py"
           }
-          title={activeFileType !== "py" ? "Only .py files can be run" : "Run circuit"}
+          title={
+            activeFileType !== "py"
+              ? "Only .py files can be run"
+              : isCircuitCode
+                ? "Run circuit"
+                : "No circuit detected — runs as a Python script locally"
+          }
         >
           {isExecuting || submittingQPU || qpuPending ? (
             <>
@@ -752,7 +888,7 @@ export default function StudioPage() {
           ) : (
             <>
               <Play className="h-3.5 w-3.5" />
-              Run Circuit
+              {isCircuitCode ? "Run Circuit" : "Run Script"}
             </>
           )}
         </Button>
@@ -785,11 +921,49 @@ export default function StudioPage() {
         <div className="flex-1 min-w-0 flex flex-col">
           {/* Open-file tabs (authenticated only) */}
           {user && !blockedUnconfirmed && <EditorTabs />}
-          {/* Code editor */}
+          {/* STUDIO-018: view toggle for md (Edit ⇄ Preview) and csv (Table ⇄ Raw) */}
+          {(activeFileType === "md" || activeFileType === "csv") && (
+            <div className="flex items-center justify-end gap-1 border-b border-border bg-card px-2 py-1">
+              {(activeFileType === "md"
+                ? ([
+                    { view: "code", label: "Edit" },
+                    { view: "preview", label: "Preview" },
+                  ] as const)
+                : ([
+                    { view: "grid", label: "Table" },
+                    { view: "code", label: "Raw" },
+                  ] as const)
+              ).map(({ view, label }) => (
+                <button
+                  key={view}
+                  onClick={() => setEditorView(view)}
+                  className={`rounded px-2 py-0.5 text-[11px] font-medium transition-colors ${
+                    editorView === view
+                      ? "bg-quantum/10 text-quantum"
+                      : "text-muted-foreground hover:text-foreground"
+                  }`}
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
+          )}
+          {/* Code editor / rendered view (STUDIO-018) */}
           <div className="flex-1 min-h-0">
+          {editorView === "preview" && activeFileType === "md" ? (
+            <MarkdownPreview value={code} />
+          ) : editorView === "grid" && activeFileType === "csv" ? (
+            <CsvGrid
+              key={activeKey ?? "csv"}
+              value={code}
+              onChange={setCode}
+              onFallbackToRaw={() => setEditorView("code")}
+            />
+          ) : (
           <MonacoEditor
             height="100%"
-            language="python"
+            path={`tqc:///${activeKey ?? "scratch"}.${activeFileType}`}
+            language={EDITOR_LANGUAGE[activeFileType]}
             theme="vs-dark"
             value={code}
             onChange={(value) => setCode(value || "")}
@@ -812,6 +986,7 @@ export default function StudioPage() {
               bracketPairColorization: { enabled: true },
             }}
           />
+          )}
           </div>
 
           {/* Bottom panel: tab bar + content */}

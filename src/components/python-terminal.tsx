@@ -11,12 +11,14 @@ import type { Terminal as XTerminal } from "@xterm/xterm";
 
 /** Imperative handle exposed to parent */
 export interface PythonTerminalHandle {
-  /** Execute a block of code (from the editor's Run button) */
-  runCode: (code: string) => Promise<void>;
+  /** Execute a block of code (from the editor's Run button). `kind` labels the banner (STUDIO-018). */
+  runCode: (code: string, kind?: "circuit" | "script") => Promise<void>;
   /** Write a line to the terminal */
   writeLine: (text: string, color?: "red" | "green" | "yellow" | "cyan" | "white") => void;
   /** Clear the terminal */
   clear: () => void;
+  /** Whether xterm + Pyodide are up and runCode would actually execute (STUDIO-018). */
+  isReady: () => boolean;
 }
 
 const ANSI = {
@@ -70,7 +72,7 @@ const PythonTerminal = forwardRef<PythonTerminalHandle, { className?: string }>(
     }, []);
 
     /** Execute a block of code from Run button */
-    const runCode = useCallback(async (code: string) => {
+    const runCode = useCallback(async (code: string, kind: "circuit" | "script" = "circuit") => {
       const term = termRef.current;
       if (!term || !isReadyRef.current) return;
 
@@ -78,7 +80,7 @@ const PythonTerminal = forwardRef<PythonTerminalHandle, { className?: string }>(
 
       // Show the code being executed
       term.write("\r\n");
-      writeLine(`${ANSI.dim}# ── Running circuit ──${ANSI.reset}`);
+      writeLine(`${ANSI.dim}# ── Running ${kind} ──${ANSI.reset}`);
       const codeLines = code.split("\n");
       for (const line of codeLines) {
         writeLine(`${ANSI.dim}${line}${ANSI.reset}`);
@@ -112,6 +114,7 @@ const PythonTerminal = forwardRef<PythonTerminalHandle, { className?: string }>(
       runCode,
       writeLine,
       clear,
+      isReady: () => isReadyRef.current,
     }), [runCode, writeLine, clear]);
 
     /** Handle REPL line execution */
