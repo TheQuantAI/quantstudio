@@ -281,6 +281,7 @@ export default function StudioPage() {
       });
       useCircuitStore.getState().markActiveSaved(saved);
       await useCircuitStore.getState().loadTree();
+      void useCircuitStore.getState().loadUsage();
       setSaveSuccess(true);
       setTimeout(() => setSaveSuccess(false), 2000);
     } catch (e) {

@@ -469,9 +469,18 @@ export async function cloudUpdateFolder(
 
 export async function cloudDeleteFolder(
   id: string,
+  hard = false,
   token?: string
 ): Promise<void> {
-  await cloudFetch(`/folders/${id}`, { method: "DELETE" }, token);
+  await cloudFetch(`/folders/${id}?hard=${hard}`, { method: "DELETE" }, token);
+}
+
+export async function cloudRestoreFolder(
+  id: string,
+  token?: string
+): Promise<CloudFolder> {
+  const res = await cloudFetch(`/folders/${id}/restore`, { method: "POST" }, token);
+  return res.json();
 }
 
 /** Files (with content) directly inside a folder — for client-side zip export. */
@@ -531,9 +540,47 @@ export async function cloudUpdateFile(
 
 export async function cloudDeleteFile(
   id: string,
+  hard = false,
   token?: string
 ): Promise<void> {
-  await cloudFetch(`/files/${id}`, { method: "DELETE" }, token);
+  await cloudFetch(`/files/${id}?hard=${hard}`, { method: "DELETE" }, token);
+}
+
+export async function cloudRestoreFile(
+  id: string,
+  token?: string
+): Promise<CloudFile> {
+  const res = await cloudFetch(`/files/${id}/restore`, { method: "POST" }, token);
+  return res.json();
+}
+
+// ─── Workspace trash + usage (API-018) ─────────────────────────
+
+export interface TrashItem {
+  id: string;
+  kind: "file" | "folder";
+  name: string;
+  deleted_at: string;
+  size_bytes: number;
+}
+
+export interface StorageUsage {
+  storage_files_used: number;
+  storage_files_limit: number;
+  storage_bytes_used: number;
+  storage_bytes_limit: number;
+}
+
+export async function cloudGetTrash(token?: string): Promise<TrashItem[]> {
+  const res = await cloudFetch("/workspace/trash", { method: "GET" }, token);
+  const data: { items: TrashItem[] } = await res.json();
+  return data.items;
+}
+
+export async function cloudEmptyTrash(token?: string): Promise<number> {
+  const res = await cloudFetch("/workspace/trash/empty", { method: "POST" }, token);
+  const data: { removed: number } = await res.json();
+  return data.removed;
 }
 
 // ─── Jobs (requires auth) ──────────────────────────────────────
@@ -564,7 +611,7 @@ export async function cloudCancelJob(
 
 // ─── Account (requires auth) ───────────────────────────────────
 
-export interface CloudUsage {
+export interface CloudUsage extends StorageUsage {
   tier: string;
   simulator_minutes_used: number;
   simulator_minutes_limit: number;

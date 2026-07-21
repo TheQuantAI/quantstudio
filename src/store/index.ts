@@ -1,10 +1,12 @@
 import { create } from "zustand";
 import {
   fetchWorkspaceTree,
+  fetchStorageUsage,
   openFile as apiOpenFile,
   type CloudFolder,
   type CloudFile,
   type FileType,
+  type StorageUsage,
 } from "@/lib/api";
 
 // ============================================================
@@ -105,6 +107,8 @@ interface CircuitState {
   activeKey: string | null;
   /** file_type of the active tab; only "py" enables Run. */
   activeFileType: FileType;
+  /** Storage usage for the indicator (API-018); null until loaded. */
+  usage: StorageUsage | null;
 
   // Actions
   setCode: (code: string) => void;
@@ -120,6 +124,7 @@ interface CircuitState {
 
   // Workspace actions (API-017)
   loadTree: () => Promise<void>;
+  loadUsage: () => Promise<void>;
   openFileTab: (fileId: string) => Promise<void>;
   openNewTab: (fileType: FileType, name: string, content?: string) => void;
   setActiveTab: (key: string) => void;
@@ -184,6 +189,7 @@ export const useCircuitStore = create<CircuitState>((set, get) => ({
   // Workspace (API-017)
   tree: { folders: [], files: [] },
   treeLoading: false,
+  usage: null,
   openTabs: [SCRATCH_TAB],
   activeKey: SCRATCH_TAB.key,
   activeFileType: "py",
@@ -254,6 +260,14 @@ export const useCircuitStore = create<CircuitState>((set, get) => ({
     }),
 
   // ─── Workspace actions (API-017) ───
+  loadUsage: async () => {
+    try {
+      const usage = await fetchStorageUsage();
+      set({ usage });
+    } catch {
+      // non-fatal; the indicator just won't update
+    }
+  },
   loadTree: async () => {
     set({ treeLoading: true });
     try {

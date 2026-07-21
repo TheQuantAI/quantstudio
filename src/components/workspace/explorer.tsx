@@ -4,7 +4,7 @@
 
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   ChevronDown,
   ChevronRight,
@@ -19,6 +19,7 @@ import {
   Pencil,
   Search,
   Trash2,
+  Upload,
 } from "lucide-react";
 import { useCircuitStore } from "@/store";
 import {
@@ -33,11 +34,19 @@ import {
   openFile,
   renameFile,
   renameFolder,
+  uploadFiles,
   type CloudFile,
   type CloudFolder,
   type FileType,
 } from "@/lib/api";
 import { NewFileDialog } from "./new-file-dialog";
+import { TrashView } from "./trash-view";
+
+function fmtBytes(n: number): string {
+  if (n < 1024) return `${n} B`;
+  if (n < 1024 * 1024) return `${(n / 1024).toFixed(0)} KB`;
+  return `${(n / (1024 * 1024)).toFixed(1)} MB`;
+}
 
 const DRAG_MIME = "application/x-tqc-node";
 
@@ -54,6 +63,8 @@ export function WorkspaceExplorer({
   const tree = useCircuitStore((s) => s.tree);
   const treeLoading = useCircuitStore((s) => s.treeLoading);
   const loadTree = useCircuitStore((s) => s.loadTree);
+  const loadUsage = useCircuitStore((s) => s.loadUsage);
+  const usage = useCircuitStore((s) => s.usage);
   const openFileTab = useCircuitStore((s) => s.openFileTab);
 
   const [search, setSearch] = useState("");
@@ -61,10 +72,14 @@ export function WorkspaceExplorer({
   const [dragOver, setDragOver] = useState<string | "root" | null>(null);
   const [newFileParent, setNewFileParent] = useState<string | null | undefined>(undefined);
   const [busy, setBusy] = useState(false);
+  const [trashOpen, setTrashOpen] = useState(false);
+  const uploadInputRef = useRef<HTMLInputElement>(null);
+  const uploadTargetRef = useRef<string | null>(null);
 
   useEffect(() => {
     void loadTree();
-  }, [loadTree]);
+    void loadUsage();
+  }, [loadTree, loadUsage]);
 
   const foldersByParent = useMemo(() => {
     const m = new Map<string | null, CloudFolder[]>();
@@ -88,7 +103,8 @@ export function WorkspaceExplorer({
 
   const refresh = useCallback(async () => {
     await loadTree();
-  }, [loadTree]);
+    await loadUsage();
+  }, [loadTree, loadUsage]);
 
   const withBusy = useCallback(
     async (fn: () => Promise<void>) => {
@@ -148,18 +164,43 @@ export function WorkspaceExplorer({
 
   const handleDeleteFolder = (f: CloudFolder) =>
     withBusy(async () => {
-      if (!window.confirm(`Delete folder "${f.name}" and everything inside it?`)) return;
-      await deleteFolder(f.id);
+      if (!window.confirm(`Move "${f.name}" and everything inside it to Trash?`)) return;
+      await deleteFolder(f.id); // soft-delete → Trash
       if (selectedFolderId === f.id) onSelectFolder(null);
       await refresh();
     });
 
   const handleDeleteFile = (f: CloudFile) =>
     withBusy(async () => {
-      if (!window.confirm(`Delete "${f.name}"?`)) return;
-      await deleteFile(f.id);
+      await deleteFile(f.id); // soft-delete → Trash (restorable for 30 days)
       await refresh();
     });
+
+  // ─── Upload (local files → workspace) ───
+
+  const runUpload = (files: File[], folderId: string | null) =>
+    withBusy(async () => {
+      if (files.length === 0) return;
+      const { errors } = await uploadFiles(files, folderId);
+      await refresh();
+      if (errors.length) {
+        alert(
+          "Some files were not uploaded:\n" +
+            errors.map((e) => `• ${e.name}: ${e.reason}`).join("\n"),
+        );
+      }
+    });
+
+  const openUploadPicker = (folderId: string | null) => {
+    uploadTargetRef.current = folderId;
+    uploadInputRef.current?.click();
+  };
+
+  const onUploadInput = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const files = Array.from(e.target.files ?? []);
+    void runUpload(files, uploadTargetRef.current);
+    e.target.value = ""; // allow re-picking the same file
+  };
 
   const handleDownloadFile = (f: CloudFile) =>
     withBusy(async () => {
@@ -178,6 +219,11 @@ export function WorkspaceExplorer({
     e.preventDefault();
     e.stopPropagation();
     setDragOver(null);
+    // OS-file drops (upload) carry dataTransfer.files; internal moves carry our MIME.
+    if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
+      void runUpload(Array.from(e.dataTransfer.files), targetFolderId);
+      return;
+    }
     const payload = e.dataTransfer.getData(DRAG_MIME);
     if (!payload) return;
     const [kind, id] = payload.split(":");
@@ -315,6 +361,9 @@ export function WorkspaceExplorer({
           <IconBtn title="New folder" onClick={() => void handleNewFolder(selectedFolderId)}>
             <FolderPlus className="h-4 w-4" />
           </IconBtn>
+          <IconBtn title="Upload files" onClick={() => openUploadPicker(selectedFolderId)}>
+            <Upload className="h-4 w-4" />
+          </IconBtn>
           {onCollapse && (
             <IconBtn title="Hide workspace" onClick={onCollapse}>
               <PanelLeftClose className="h-4 w-4" />
@@ -322,6 +371,14 @@ export function WorkspaceExplorer({
           )}
         </span>
       </div>
+      <input
+        ref={uploadInputRef}
+        type="file"
+        multiple
+        accept=".py,.qasm,.md,.json,.csv"
+        className="hidden"
+        onChange={onUploadInput}
+      />
 
       {/* Search */}
       <div className="flex items-center gap-1.5 border-b border-border px-2 py-1.5">
@@ -368,11 +425,41 @@ export function WorkspaceExplorer({
         )}
       </div>
 
+      {/* Footer: storage indicator + Trash (API-018) */}
+      <div className="border-t border-border px-2 py-1.5">
+        {usage && (
+          <div className="mb-1">
+            {(() => {
+              const overFiles = usage.storage_files_used >= usage.storage_files_limit;
+              const overBytes = usage.storage_bytes_used >= usage.storage_bytes_limit;
+              const near =
+                usage.storage_files_used / usage.storage_files_limit >= 0.9 ||
+                usage.storage_bytes_used / usage.storage_bytes_limit >= 0.9;
+              const cls = overFiles || overBytes || near ? "text-amber-500" : "text-muted-foreground";
+              return (
+                <div className={`text-[10px] ${cls}`} title="Workspace storage used">
+                  {usage.storage_files_used}/{usage.storage_files_limit} files ·{" "}
+                  {fmtBytes(usage.storage_bytes_used)}/{fmtBytes(usage.storage_bytes_limit)}
+                </div>
+              );
+            })()}
+          </div>
+        )}
+        <button
+          onClick={() => setTrashOpen(true)}
+          className="flex w-full items-center gap-1.5 rounded px-1 py-1 text-xs text-muted-foreground hover:bg-accent hover:text-foreground"
+        >
+          <Trash2 className="h-3.5 w-3.5" />
+          Trash
+        </button>
+      </div>
+
       <NewFileDialog
         open={newFileParent !== undefined}
         onClose={() => setNewFileParent(undefined)}
         onCreate={handleCreateFile(newFileParent)}
       />
+      <TrashView open={trashOpen} onClose={() => setTrashOpen(false)} onChanged={() => void refresh()} />
     </div>
   );
 }
