@@ -129,6 +129,8 @@ interface CircuitState {
   openNewTab: (fileType: FileType, name: string, content?: string) => void;
   setActiveTab: (key: string) => void;
   closeTab: (key: string) => void;
+  /** Close every tab bound to one of these file ids (file deleted — STUDIO-018). */
+  closeTabsByFileIds: (fileIds: string[]) => void;
   /** After a successful save: bind the active tab to its file id and clear dirty. */
   markActiveSaved: (file: { id: string; name: string; folder_id: string | null }) => void;
 }
@@ -337,6 +339,33 @@ export const useCircuitStore = create<CircuitState>((set, get) => ({
     set((s) => {
       const remaining = s.openTabs.filter((t) => t.key !== key);
       if (s.activeKey !== key) return { openTabs: remaining };
+      const next = remaining[remaining.length - 1];
+      if (!next) {
+        return {
+          ...projectTab(SCRATCH_TAB),
+          openTabs: [SCRATCH_TAB],
+          activeKey: SCRATCH_TAB.key,
+          result: null,
+          error: null,
+          circuitDiagram: null,
+        };
+      }
+      return {
+        ...projectTab(next),
+        openTabs: remaining,
+        activeKey: next.key,
+        result: null,
+        error: null,
+        circuitDiagram: null,
+      };
+    }),
+  closeTabsByFileIds: (fileIds) =>
+    set((s) => {
+      const ids = new Set(fileIds);
+      const remaining = s.openTabs.filter((t) => t.fileId === null || !ids.has(t.fileId));
+      if (remaining.length === s.openTabs.length) return {};
+      const activeSurvives = remaining.some((t) => t.key === s.activeKey);
+      if (activeSurvives) return { openTabs: remaining };
       const next = remaining[remaining.length - 1];
       if (!next) {
         return {

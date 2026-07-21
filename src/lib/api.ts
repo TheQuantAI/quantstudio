@@ -644,7 +644,10 @@ export async function uploadFiles(
       continue;
     }
     try {
-      const content = await file.text();
+      // STUDIO-018: content-level check — a renamed binary (PNG-as-.csv) must
+      // not land in the workspace as mojibake.
+      const { decodeTextFile } = await import("./text-validation");
+      const content = decodeTextFile(await file.arrayBuffer());
       const created = await createFile({ name: file.name, fileType, folderId, content });
       result.created.push(created);
     } catch (e) {

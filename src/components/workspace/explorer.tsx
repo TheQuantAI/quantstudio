@@ -162,17 +162,57 @@ export function WorkspaceExplorer({
       await refresh();
     });
 
+  // STUDIO-018: file ids inside a folder subtree (client-side BFS over the tree).
+  const collectDescendantFileIds = useCallback(
+    (folderId: string): string[] => {
+      const folderIds = new Set([folderId]);
+      const queue = [folderId];
+      while (queue.length > 0) {
+        const cur = queue.shift()!;
+        for (const child of foldersByParent.get(cur) ?? []) {
+          if (!folderIds.has(child.id)) {
+            folderIds.add(child.id);
+            queue.push(child.id);
+          }
+        }
+      }
+      return tree.files.filter((f) => f.folder_id && folderIds.has(f.folder_id)).map((f) => f.id);
+    },
+    [foldersByParent, tree.files],
+  );
+
   const handleDeleteFolder = (f: CloudFolder) =>
     withBusy(async () => {
-      if (!window.confirm(`Move "${f.name}" and everything inside it to Trash?`)) return;
+      // STUDIO-018: deleting a folder closes tabs of every file inside it; warn
+      // when any of those tabs has unsaved edits (they'd be discarded).
+      const fileIds = collectDescendantFileIds(f.id);
+      const ids = new Set(fileIds);
+      const state = useCircuitStore.getState();
+      const dirtyOpen = state.openTabs.some((t) => t.fileId && ids.has(t.fileId) && t.isDirty);
+      const msg = dirtyOpen
+        ? `Move "${f.name}" and everything inside it to Trash? Open files inside have unsaved changes that will be discarded.`
+        : `Move "${f.name}" and everything inside it to Trash?`;
+      if (!window.confirm(msg)) return;
       await deleteFolder(f.id); // soft-delete → Trash
+      state.closeTabsByFileIds(fileIds);
       if (selectedFolderId === f.id) onSelectFolder(null);
       await refresh();
     });
 
   const handleDeleteFile = (f: CloudFile) =>
     withBusy(async () => {
+      // STUDIO-018: the file's tab closes with it; confirm only if it has
+      // unsaved edits (plain deletes stay promptless — Trash is restorable).
+      const state = useCircuitStore.getState();
+      const tab = state.openTabs.find((t) => t.fileId === f.id);
+      if (
+        tab?.isDirty &&
+        !window.confirm(`"${f.name}" has unsaved changes that will be discarded. Move to Trash?`)
+      ) {
+        return;
+      }
       await deleteFile(f.id); // soft-delete → Trash (restorable for 30 days)
+      state.closeTabsByFileIds([f.id]);
       await refresh();
     });
 
