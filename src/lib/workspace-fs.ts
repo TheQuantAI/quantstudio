@@ -26,8 +26,8 @@ export interface SyncReport {
 // Steady-state syncs therefore cost ~0 API requests (60/min rate limit).
 const contentCache = new Map<string, { updatedAt: string; content: string }>();
 
-/** Map every live file id → its workspace-relative path ("folder/sub/name"). */
-export function buildPathMap(tree: CloudWorkspaceTree): Map<string, string> {
+/** Resolver: folder id → workspace-relative path ("" for root/null). */
+export function folderPathResolver(tree: CloudWorkspaceTree): (id: string | null) => string {
   const byId = new Map(tree.folders.map((f) => [f.id, f]));
   const memo = new Map<string, string>();
   const pathOf = (id: string | null, depth = 0): string => {
@@ -41,6 +41,12 @@ export function buildPathMap(tree: CloudWorkspaceTree): Map<string, string> {
     memo.set(id, p);
     return p;
   };
+  return (id) => pathOf(id);
+}
+
+/** Map every live file id → its workspace-relative path ("folder/sub/name"). */
+export function buildPathMap(tree: CloudWorkspaceTree): Map<string, string> {
+  const pathOf = folderPathResolver(tree);
   const map = new Map<string, string>();
   for (const file of tree.files) {
     const dir = pathOf(file.folder_id);
@@ -71,16 +77,22 @@ export function selectFilesToSync<T extends { id: string; folder_id: string | nu
 export async function syncWorkspaceFS(input: {
   tree: CloudWorkspaceTree;
   openTabs: OpenTab[];
-  activeFolderId?: string | null;
+  /**
+   * Folder of the file being run. The Pyodide cwd is set here after mounting,
+   * so a script's `open("data.csv")` resolves relative to its own folder — the
+   * behavior users expect from "the file next to mine". null = workspace root.
+   */
+  cwdFolderId?: string | null;
 }): Promise<SyncReport> {
   const { tree, openTabs } = input;
   const warnings: string[] = [];
   const pathMap = buildPathMap(tree);
+  const folderPath = folderPathResolver(tree);
 
   const openFileIds = new Set(
     openTabs.filter((t) => t.fileId !== null).map((t) => t.fileId as string),
   );
-  const files = selectFilesToSync(tree.files, openFileIds, input.activeFolderId ?? null);
+  const files = selectFilesToSync(tree.files, openFileIds, input.cwdFolderId ?? null);
   let skipped = tree.files.length - files.length;
   if (skipped > 0) {
     warnings.push(
@@ -146,7 +158,16 @@ export async function syncWorkspaceFS(input: {
     }
   }
 
-  // Relative paths now resolve against the workspace root.
-  pyodide.runPython(`import os; os.chdir(${JSON.stringify(WORKSPACE_MOUNT)})`);
+  // chdir into the running file's own folder so its relative opens ("data.csv")
+  // resolve against the folder it lives in. The dir always exists — the file
+  // being run was mounted into it (or it's the root).
+  const cwdRel = folderPath(input.cwdFolderId ?? null);
+  const cwd = cwdRel ? `${WORKSPACE_MOUNT}/${cwdRel}` : WORKSPACE_MOUNT;
+  try {
+    pyodide.FS.mkdirTree(cwd);
+    pyodide.runPython(`import os; os.chdir(${JSON.stringify(cwd)})`);
+  } catch {
+    pyodide.runPython(`import os; os.chdir(${JSON.stringify(WORKSPACE_MOUNT)})`);
+  }
   return { synced, skipped, warnings };
 }

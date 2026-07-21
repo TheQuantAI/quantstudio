@@ -73,6 +73,22 @@ export function looksLikeCircuit(code: string): boolean {
   return /\bCircuit\s*\(/.test(code);
 }
 
+/**
+ * Auto-load any Pyodide-bundled packages the code imports (numpy, pandas,
+ * scipy, matplotlib, scikit-learn, sympy, networkx, …) before it runs, so
+ * `import pandas as pd` just works (STUDIO-018). Unknown/pure-PyPI imports are
+ * ignored here — users can `micropip.install(...)` those in the terminal.
+ * Best-effort: a load failure must not block the run (the import will raise
+ * its own clear ModuleNotFoundError).
+ */
+async function ensurePackages(pyodide: PyodideInterface, code: string): Promise<void> {
+  try {
+    await pyodide.loadPackagesFromImports(code);
+  } catch {
+    /* offline / unknown package — let the actual import surface the error */
+  }
+}
+
 /** Output callback type */
 export type OutputCallback = (text: string, stream: "stdout" | "stderr") => void;
 
@@ -104,6 +120,8 @@ export async function executePython(
   });
 
   try {
+    // Auto-load bundled packages the code imports (pandas, numpy, …).
+    await ensurePackages(pyodide, code);
     // Run the user's code
     await pyodide.runPythonAsync(code);
     return { success: true, output: stdout, error: null };
@@ -149,6 +167,8 @@ _c = _circuits[-1]
 _json.dumps({"qasm": _c.to_openqasm(), "num_qubits": _c.n_qubits})
 `;
 
+  // Circuit code may use numpy/etc. before defining the circuit — load first.
+  await ensurePackages(pyodide, code);
   const raw = (await pyodide.runPythonAsync(driver)) as string;
   return JSON.parse(raw) as { qasm: string; num_qubits: number };
 }
@@ -180,6 +200,9 @@ export async function executeRepl(
     // If it's an expression, display its repr
     const trimmed = line.trim();
     if (!trimmed || trimmed.startsWith("#")) return;
+
+    // Auto-load bundled packages on `import`/`from` lines.
+    if (/^(import |from )/.test(trimmed)) await ensurePackages(pyodide, trimmed);
 
     // Check if it's a statement (assignment, import, if, for, def, class, etc.)
     const isStatement = /^(import |from |if |for |while |def |class |with |try |raise |assert |del |pass|break|continue|return |yield )/.test(trimmed)
