@@ -3,7 +3,12 @@
 
 import { describe, expect, it } from "vitest";
 import type { CloudFile, CloudFolder, CloudWorkspaceTree } from "./cloud-api";
-import { buildPathMap, MAX_SYNC_FILES, selectFilesToSync } from "./workspace-fs";
+import {
+  buildPathMap,
+  folderPathResolver,
+  MAX_SYNC_FILES,
+  selectFilesToSync,
+} from "./workspace-fs";
 
 const folder = (id: string, name: string, parent_id: string | null): CloudFolder => ({
   id, name, parent_id, user_id: "u", is_default: false, created_at: "", updated_at: "",
@@ -28,6 +33,19 @@ describe("buildPathMap", () => {
   it("treats an orphan folder reference as root", () => {
     const tree: CloudWorkspaceTree = { folders: [], files: [file("f1", "x.py", "missing")] };
     expect(buildPathMap(tree).get("f1")).toBe("x.py");
+  });
+});
+
+describe("folderPathResolver (run cwd)", () => {
+  it("resolves a folder's path and returns '' for root", () => {
+    const tree: CloudWorkspaceTree = {
+      folders: [folder("a", "Test Files", null), folder("b", "Data", "a")],
+      files: [],
+    };
+    const path = folderPathResolver(tree);
+    expect(path(null)).toBe("");
+    expect(path("a")).toBe("Test Files");
+    expect(path("b")).toBe("Test Files/Data");
   });
 });
 

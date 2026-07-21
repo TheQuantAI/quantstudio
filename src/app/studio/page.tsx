@@ -514,10 +514,13 @@ export default function StudioPage() {
     if (user && !blockedUnconfirmed) {
       try {
         const st = useCircuitStore.getState();
+        const activeTab = st.openTabs.find((t) => t.key === st.activeKey);
         const report = await syncWorkspaceFS({
           tree: st.tree,
           openTabs: st.openTabs,
-          activeFolderId: selectedFolderId,
+          // cwd = the running file's own folder, so open("data.csv") finds a
+          // sibling file (not just files at the workspace root).
+          cwdFolderId: activeTab?.folderId ?? null,
         });
         for (const w of report.warnings) addLog("warn", w);
       } catch {
@@ -660,7 +663,7 @@ export default function StudioPage() {
     } finally {
       setExecuting(false);
     }
-  }, [code, circuitName, selectedBackend, blockedUnconfirmed, user, activeFileType, selectedFolderId, runScriptLocally, setExecuting, setResult, setError, setCircuitDiagram, addLog, terminalOpen, setBottomTab, setTerminalOpen]);
+  }, [code, circuitName, selectedBackend, blockedUnconfirmed, user, activeFileType, runScriptLocally, setExecuting, setResult, setError, setCircuitDiagram, addLog, terminalOpen, setBottomTab, setTerminalOpen]);
 
   const handleCopyCode = useCallback(() => {
     navigator.clipboard.writeText(code);
