@@ -6,6 +6,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
+  BookOpen,
   ChevronDown,
   ChevronRight,
   Download,
@@ -41,6 +42,7 @@ import {
 } from "@/lib/api";
 import { NewFileDialog } from "./new-file-dialog";
 import { TrashView } from "./trash-view";
+import { GettingStartedView } from "./getting-started-view";
 
 function fmtBytes(n: number): string {
   if (n < 1024) return `${n} B`;
@@ -73,6 +75,7 @@ export function WorkspaceExplorer({
   const [newFileParent, setNewFileParent] = useState<string | null | undefined>(undefined);
   const [busy, setBusy] = useState(false);
   const [trashOpen, setTrashOpen] = useState(false);
+  const [guideOpen, setGuideOpen] = useState(false);
   const uploadInputRef = useRef<HTMLInputElement>(null);
   const uploadTargetRef = useRef<string | null>(null);
 
@@ -431,6 +434,16 @@ export function WorkspaceExplorer({
         />
       </div>
 
+      {/* Pinned, non-deletable guide (virtual — not a real file). */}
+      <button
+        onClick={() => setGuideOpen(true)}
+        className="flex items-center gap-1.5 border-b border-border px-2 py-1.5 text-left text-xs text-muted-foreground hover:bg-accent hover:text-foreground"
+        title="What you can do in QuantStudio"
+      >
+        <BookOpen className="h-3.5 w-3.5 shrink-0 text-quantum" />
+        Getting Started
+      </button>
+
       {/* Tree / results. min-h-0 is required here: without it, a flex child
           defaults to min-height:auto and grows to fit all files instead of
           scrolling once the list is taller than the sidebar. */}
@@ -500,6 +513,7 @@ export function WorkspaceExplorer({
         onCreate={handleCreateFile(newFileParent)}
       />
       <TrashView open={trashOpen} onClose={() => setTrashOpen(false)} onChanged={() => void refresh()} />
+      <GettingStartedView open={guideOpen} onClose={() => setGuideOpen(false)} />
     </div>
   );
 }
