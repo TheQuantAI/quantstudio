@@ -85,8 +85,9 @@ const MarkdownPreview = dynamic(() => import("@/components/workspace/markdown-pr
   ssr: false,
 });
 const CsvGrid = dynamic(() => import("@/components/workspace/csv-grid"), { ssr: false });
+const JsonTree = dynamic(() => import("@/components/workspace/json-tree"), { ssr: false });
 
-type EditorView = "code" | "preview" | "grid";
+type EditorView = "code" | "preview" | "grid" | "tree";
 
 // Right panel tab types
 type RightPanelTab = "results" | "probabilities" | "circuit" | "stats";
@@ -263,6 +264,19 @@ export default function StudioPage() {
   useEffect(() => {
     setEditorView(activeFileType === "csv" ? "grid" : "code");
   }, [activeKey, activeFileType]);
+
+  // STUDIO-018: JSON pretty-print. Marks the tab dirty (content changed); an
+  // invalid document surfaces an inline message and leaves the text untouched.
+  const [jsonError, setJsonError] = useState<string | null>(null);
+  useEffect(() => setJsonError(null), [activeKey]);
+  const handleFormatJson = useCallback(() => {
+    try {
+      setCode(JSON.stringify(JSON.parse(code), null, 2));
+      setJsonError(null);
+    } catch (e) {
+      setJsonError(e instanceof Error ? e.message : "Invalid JSON");
+    }
+  }, [code, setCode]);
 
   // STUDIO-018: does the active .py define a circuit (cloud path) or is it a
   // plain script (local Pyodide run)? Static check; the cloud compile error is
@@ -924,18 +938,40 @@ export default function StudioPage() {
         <div className="flex-1 min-w-0 flex flex-col">
           {/* Open-file tabs (authenticated only) */}
           {user && !blockedUnconfirmed && <EditorTabs />}
-          {/* STUDIO-018: view toggle for md (Edit ⇄ Preview) and csv (Table ⇄ Raw) */}
-          {(activeFileType === "md" || activeFileType === "csv") && (
-            <div className="flex items-center justify-end gap-1 border-b border-border bg-card px-2 py-1">
+          {/* STUDIO-018: view toggle — md (Edit⇄Preview), csv (Table⇄Raw), json (Code⇄Tree + Format) */}
+          {(activeFileType === "md" || activeFileType === "csv" || activeFileType === "json") && (
+            <div className="flex items-center gap-1 border-b border-border bg-card px-2 py-1">
+              {activeFileType === "json" && (
+                <>
+                  <button
+                    onClick={handleFormatJson}
+                    className="rounded px-2 py-0.5 text-[11px] font-medium text-muted-foreground transition-colors hover:text-foreground"
+                    title="Pretty-print JSON"
+                  >
+                    Format
+                  </button>
+                  {jsonError && (
+                    <span className="truncate text-[11px] text-amber-500" title={jsonError}>
+                      Invalid JSON
+                    </span>
+                  )}
+                </>
+              )}
+              <div className="flex-1" />
               {(activeFileType === "md"
                 ? ([
                     { view: "code", label: "Edit" },
                     { view: "preview", label: "Preview" },
                   ] as const)
-                : ([
-                    { view: "grid", label: "Table" },
-                    { view: "code", label: "Raw" },
-                  ] as const)
+                : activeFileType === "csv"
+                  ? ([
+                      { view: "grid", label: "Table" },
+                      { view: "code", label: "Raw" },
+                    ] as const)
+                  : ([
+                      { view: "code", label: "Code" },
+                      { view: "tree", label: "Tree" },
+                    ] as const)
               ).map(({ view, label }) => (
                 <button
                   key={view}
@@ -962,6 +998,8 @@ export default function StudioPage() {
               onChange={setCode}
               onFallbackToRaw={() => setEditorView("code")}
             />
+          ) : editorView === "tree" && activeFileType === "json" ? (
+            <JsonTree key={activeKey ?? "json"} value={code} />
           ) : (
           <MonacoEditor
             height="100%"
