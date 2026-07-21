@@ -20,6 +20,11 @@ import {
   cloudGetFile,
   cloudUpdateFile,
   cloudDeleteFile,
+  cloudRestoreFile,
+  cloudRestoreFolder,
+  cloudGetTrash,
+  cloudEmptyTrash,
+  cloudGetUsage,
   isCloudAuthenticated,
   getAuthToken,
   type CloudBackendInfo,
@@ -27,6 +32,8 @@ import {
   type CloudFile,
   type CloudWorkspaceTree,
   type FileType,
+  type TrashItem,
+  type StorageUsage,
 } from "./cloud-api";
 import { track } from "./analytics";
 
@@ -497,9 +504,14 @@ export async function moveFolder(
   return cloudUpdateFolder(id, { parent_id: parentId });
 }
 
-export async function deleteFolder(id: string): Promise<void> {
+export async function deleteFolder(id: string, hard = false): Promise<void> {
   requireAuth();
-  return cloudDeleteFolder(id);
+  return cloudDeleteFolder(id, hard);
+}
+
+export async function restoreFolder(id: string): Promise<CloudFolder> {
+  requireAuth();
+  return cloudRestoreFolder(id);
 }
 
 export async function createFile(params: {
@@ -568,9 +580,78 @@ export async function moveFile(
   return cloudUpdateFile(id, { folder_id: folderId });
 }
 
-export async function deleteFile(id: string): Promise<void> {
+export async function deleteFile(id: string, hard = false): Promise<void> {
   requireAuth();
-  return cloudDeleteFile(id);
+  return cloudDeleteFile(id, hard);
+}
+
+export async function restoreFile(id: string): Promise<CloudFile> {
+  requireAuth();
+  return cloudRestoreFile(id);
+}
+
+// ─── Trash + storage usage (API-018) ───────────────────────────
+
+export type { TrashItem, StorageUsage } from "./cloud-api";
+
+export async function listTrash(): Promise<TrashItem[]> {
+  requireAuth();
+  return cloudGetTrash();
+}
+
+export async function emptyTrash(): Promise<number> {
+  requireAuth();
+  return cloudEmptyTrash();
+}
+
+export async function fetchStorageUsage(): Promise<StorageUsage> {
+  requireAuth();
+  return cloudGetUsage();
+}
+
+/** File types accepted for upload (only these can be created). */
+export const UPLOADABLE_EXT: Record<string, FileType> = {
+  py: "py",
+  qasm: "qasm",
+  md: "md",
+  json: "json",
+  csv: "csv",
+};
+const MAX_UPLOAD_BYTES = 100_000;
+
+export interface UploadResult {
+  created: CloudFile[];
+  errors: { name: string; reason: string }[];
+}
+
+/** Read local text files and create them in a folder. Validates type + size;
+ *  surfaces per-file errors (bad type, too large, quota). */
+export async function uploadFiles(
+  files: File[],
+  folderId: string | null,
+): Promise<UploadResult> {
+  requireAuth();
+  const result: UploadResult = { created: [], errors: [] };
+  for (const file of files) {
+    const ext = file.name.split(".").pop()?.toLowerCase() ?? "";
+    const fileType = UPLOADABLE_EXT[ext];
+    if (!fileType) {
+      result.errors.push({ name: file.name, reason: "Unsupported type (use .py/.qasm/.md/.json/.csv)" });
+      continue;
+    }
+    if (file.size > MAX_UPLOAD_BYTES) {
+      result.errors.push({ name: file.name, reason: "Too large (max 100 KB)" });
+      continue;
+    }
+    try {
+      const content = await file.text();
+      const created = await createFile({ name: file.name, fileType, folderId, content });
+      result.created.push(created);
+    } catch (e) {
+      result.errors.push({ name: file.name, reason: e instanceof Error ? e.message : "Upload failed" });
+    }
+  }
+  return result;
 }
 
 /** Trigger a browser download of a single file's content. */
