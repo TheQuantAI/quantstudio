@@ -34,7 +34,9 @@ import {
 } from "lucide-react";
 import { useCallback, useMemo, useRef, useState, useEffect } from "react";
 import { useAuth } from "@/components/auth-provider";
-import { runCircuit, submitCircuitToQPU, pollQPUResult, saveFile } from "@/lib/api";
+import { runCircuit, submitCircuitToQPU, pollQPUResult, saveFile, QPUTerminalError } from "@/lib/api";
+import { cloudGetJob } from "@/lib/cloud-api";
+import { stashPendingQPU, readPendingQPU, clearPendingQPU } from "@/lib/qpu-pending";
 import { WorkspaceExplorer } from "@/components/workspace/explorer";
 import { EditorTabs } from "@/components/workspace/editor-tabs";
 import { isQPUBackend, type FileType } from "@/lib/cloud-api";
@@ -88,6 +90,19 @@ const CsvGrid = dynamic(() => import("@/components/workspace/csv-grid"), { ssr: 
 const JsonTree = dynamic(() => import("@/components/workspace/json-tree"), { ssr: false });
 
 type EditorView = "code" | "preview" | "grid" | "tree";
+
+// STUDIO-019: honest wording for each terminal QPU outcome. Never implies a
+// result exists when it doesn't.
+function qpuTerminalMessage(kind: "failed" | "cancelled" | "timeout", detail: string): string {
+  switch (kind) {
+    case "timeout":
+      return `${detail} Nothing ran and no result exists — the device queue was too long. Try re-running, or pick a less busy device from the backend picker.`;
+    case "cancelled":
+      return `QPU job was cancelled. ${detail}`;
+    default:
+      return `QPU job failed at the provider: ${detail}`;
+  }
+}
 
 // Right panel tab types
 type RightPanelTab = "results" | "probabilities" | "circuit" | "stats";
@@ -501,6 +516,98 @@ export default function StudioPage() {
     [addLog, setError, setExecuting, waitForTerminal],
   );
 
+  // STUDIO-019: watch a submitted QPU job to its outcome. Shared by the submit
+  // path and the resume-on-return path so messaging/rendering are identical.
+  const watchQPUJob = useCallback(
+    async (jobId: string, backend: string, qasm: string | null) => {
+      try {
+        const data = await pollQPUResult(jobId, {
+          qasm,
+          onStatusUpdate: (s) => addLog("info", `Job status: ${s}…`),
+        });
+        clearPendingQPU();
+        addLog("success", `Result received from ${data.backend} in ${data.execution_time.toFixed(1)}s.`);
+        setResult({
+          counts: data.counts,
+          probabilities: data.probabilities,
+          mostLikely: data.most_likely,
+          shots: data.shots,
+          backend: data.backend,
+          executionTime: data.execution_time,
+          jobId: data.job_id,
+          metadata: {
+            numQubits: data.metadata?.num_qubits ?? 0,
+            circuitDepth: data.metadata?.circuit_depth ?? 0,
+            gateCount: data.metadata?.gate_count ?? 0,
+          },
+        });
+        if (data.circuit_diagram) setCircuitDiagram(data.circuit_diagram);
+      } catch (err) {
+        if (err instanceof QPUTerminalError) {
+          // The job is dead — say so plainly and forget it.
+          clearPendingQPU();
+          const msg = qpuTerminalMessage(err.kind, err.message);
+          addLog("error", msg);
+          setError(msg);
+        } else {
+          // Poll window expired — the job is still pending at IBM. Keep the
+          // marker so reopening Studio resumes watching it.
+          addLog(
+            "info",
+            `Still queued at IBM (${backend}) after 20 minutes. The job keeps waiting — it is auto-cancelled only if it hasn't started within 6 hours. If it completes, the result appears on your Dashboard, and reopening Studio resumes watching it.`,
+          );
+        }
+      } finally {
+        setQpuPending(null);
+      }
+    },
+    [addLog, setResult, setError, setCircuitDiagram],
+  );
+
+  // STUDIO-019: resume watching a QPU job from a previous session (marker in
+  // localStorage). Renders the result if it completed while we were away, or
+  // reports the terminal state honestly.
+  useEffect(() => {
+    if (!user) return;
+    const pending = readPendingQPU();
+    if (!pending) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const job = await cloudGetJob(pending.jobId);
+        if (cancelled) return;
+        setTerminalOpen(true);
+        setBottomTab("output");
+        if (["failed", "timeout", "cancelled"].includes(job.status)) {
+          clearPendingQPU();
+          addLog(
+            "error",
+            qpuTerminalMessage(
+              job.status as "failed" | "timeout" | "cancelled",
+              job.error_message || `QPU job ${job.status}.`,
+            ),
+          );
+          return;
+        }
+        setRightPanelTab("results");
+        if (job.status === "completed") {
+          addLog("info", `Your QPU job on ${pending.backend} finished while you were away — loading the result…`);
+        } else {
+          setQpuPending({ jobId: pending.jobId, backend: pending.backend });
+          addLog("info", `Resumed watching your QPU job on ${pending.backend} (submitted ${new Date(pending.submittedAt).toLocaleString()}). Run is disabled until it finishes.`);
+        }
+        await watchQPUJob(pending.jobId, pending.backend, job.circuit_qasm ?? null);
+      } catch {
+        // 404/403/network — job gone or not ours anymore; drop the marker.
+        clearPendingQPU();
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [user]);
+
   // Execute circuit via FastAPI backend
   const handleRun = useCallback(async () => {
     // STUDIO-016: block cloud runs for unconfirmed users; browser sim stays open.
@@ -561,13 +668,17 @@ export default function StudioPage() {
       addLog("info", `Submitting "${circuitName}" to real hardware (${selectedBackend})...`);
 
       let jobId: string;
+      let submittedQasm: string | null = null;
       try {
         const job = await submitCircuitToQPU(code, 1024, selectedBackend);
         jobId = job.job_id;
+        submittedQasm = job.qasm;
         setQpuPending({ jobId, backend: selectedBackend });
+        // STUDIO-019: persist the pending job so a closed tab can resume watching.
+        stashPendingQPU({ jobId, backend: selectedBackend, submittedAt: new Date().toISOString() });
         addLog("success", `Submitted to IBM Quantum — job ${jobId}.`);
         addLog("info", "Queued at IBM — real-hardware queues range from a minute to a few hours.");
-        addLog("info", "You can keep working; results appear here and on the Dashboard when ready.");
+        addLog("info", "You can keep working; if you close this tab, reopening Studio resumes watching the job.");
       } catch (err) {
         const msg = err instanceof Error ? err.message : "QPU submission failed.";
         addLog("error", msg);
@@ -577,34 +688,9 @@ export default function StudioPage() {
         setSubmittingQPU(false);
       }
 
-      // Poll in the background until IBM finishes, then render the result just
-      // like a simulator run. The tab stays usable; the Run button stays
-      // disabled (qpuPending) so repeat clicks don't burn the monthly quota.
-      try {
-        const data = await pollQPUResult(jobId, code, (s) => addLog("info", `Job status: ${s}…`));
-        addLog("success", `Result received from ${data.backend} in ${data.execution_time.toFixed(1)}s.`);
-        setResult({
-          counts: data.counts,
-          probabilities: data.probabilities,
-          mostLikely: data.most_likely,
-          shots: data.shots,
-          backend: data.backend,
-          executionTime: data.execution_time,
-          jobId: data.job_id,
-          metadata: {
-            numQubits: data.metadata?.num_qubits ?? 0,
-            circuitDepth: data.metadata?.circuit_depth ?? 0,
-            gateCount: data.metadata?.gate_count ?? 0,
-          },
-        });
-        if (data.circuit_diagram) setCircuitDiagram(data.circuit_diagram);
-      } catch (err) {
-        const msg = err instanceof Error ? err.message : "Could not fetch the QPU result.";
-        // A timeout here is not a failure — the job is still queued at IBM.
-        addLog("info", `${msg} The job is tracked on the Dashboard and its result is saved automatically.`);
-      } finally {
-        setQpuPending(null);
-      }
+      // Watch in the background until IBM finishes. The tab stays usable; the
+      // Run button stays disabled (qpuPending) so repeat clicks don't burn quota.
+      await watchQPUJob(jobId, selectedBackend, submittedQasm);
       return;
     }
 
@@ -677,7 +763,7 @@ export default function StudioPage() {
     } finally {
       setExecuting(false);
     }
-  }, [code, circuitName, selectedBackend, blockedUnconfirmed, user, activeFileType, runScriptLocally, setExecuting, setResult, setError, setCircuitDiagram, addLog, terminalOpen, setBottomTab, setTerminalOpen]);
+  }, [code, circuitName, selectedBackend, blockedUnconfirmed, user, activeFileType, runScriptLocally, watchQPUJob, setExecuting, setResult, setError, setCircuitDiagram, addLog, terminalOpen, setBottomTab, setTerminalOpen]);
 
   const handleCopyCode = useCallback(() => {
     navigator.clipboard.writeText(code);

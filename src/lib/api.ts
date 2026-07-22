@@ -87,7 +87,7 @@ export async function submitCircuitToQPU(
   code: string,
   shots: number = 1024,
   backend: string,
-): Promise<{ job_id: string; status: string; backend: string | null }> {
+): Promise<{ job_id: string; status: string; backend: string | null; qasm: string }> {
   let circuit_qasm: string | undefined;
   let num_qubits: number | undefined;
   try {
@@ -109,7 +109,22 @@ export async function submitCircuitToQPU(
   });
 
   track("circuit_run", { mode: "qpu", backend, shots });
-  return { job_id: job.job_id, status: job.status, backend: job.backend };
+  // qasm returned so the caller can render the SUBMITTED circuit's diagram
+  // and pass it to pollQPUResult / the resume path (STUDIO-019).
+  return { job_id: job.job_id, status: job.status, backend: job.backend, qasm: circuit_qasm };
+}
+
+/** A QPU job reached a terminal non-success state (STUDIO-019). Distinct from
+ *  CloudAPIError(408), which means the poll *window* expired while the job is
+ *  still pending — callers must message these very differently. */
+export class QPUTerminalError extends Error {
+  constructor(
+    public kind: "failed" | "cancelled" | "timeout",
+    message: string,
+  ) {
+    super(message);
+    this.name = "QPUTerminalError";
+  }
 }
 
 /** How long Studio foreground-polls a QPU job before handing off to the
@@ -125,18 +140,26 @@ const QPU_POLL_TIMEOUT_MS = 20 * 60 * 1000; // 20 minutes
  */
 export async function pollQPUResult(
   jobId: string,
-  code: string,
-  onStatusUpdate?: (status: string) => void,
+  opts: { qasm?: string | null; onStatusUpdate?: (status: string) => void } = {},
 ): Promise<ExecutionResult> {
   const { cloudPollJob, cloudGetJobResult } = await import("./cloud-api");
   const token = getAuthToken() ?? undefined;
 
-  const finalJob = await cloudPollJob(jobId, token, onStatusUpdate, QPU_POLL_TIMEOUT_MS);
+  const finalJob = await cloudPollJob(jobId, token, opts.onStatusUpdate, QPU_POLL_TIMEOUT_MS);
+  // Terminal non-success states get a typed error so callers can never again
+  // conflate "your job died" with "still waiting" (STUDIO-019).
   if (finalJob.status === "failed") {
-    throw new Error(finalJob.error_message || "QPU job failed at the provider.");
+    throw new QPUTerminalError("failed", finalJob.error_message || "QPU job failed at the provider.");
   }
-  if (finalJob.status === "cancelled") throw new Error("QPU job was cancelled.");
-  if (finalJob.status === "timeout") throw new Error("QPU job timed out at the provider.");
+  if (finalJob.status === "cancelled") {
+    throw new QPUTerminalError("cancelled", finalJob.error_message || "QPU job was cancelled.");
+  }
+  if (finalJob.status === "timeout") {
+    throw new QPUTerminalError(
+      "timeout",
+      finalJob.error_message || "QPU job was auto-cancelled after waiting too long in the provider queue.",
+    );
+  }
 
   const result = await cloudGetJobResult(jobId, token);
   const counts = result.counts;
@@ -146,11 +169,20 @@ export async function pollQPUResult(
     ["", 0] as [string, number],
   )[0];
 
+  // Diagram from the SUBMITTED circuit's QASM — not from whatever is in the
+  // editor now (which may have been edited during the queue wait).
   let circuit_diagram = "";
   try {
-    const { generateDiagramFromCode } = await import("./simulator");
-    circuit_diagram = generateDiagramFromCode(code);
+    const { diagramFromQasm } = await import("./qasm-diagram");
+    circuit_diagram = diagramFromQasm(opts.qasm) ?? "";
   } catch { /* best-effort */ }
+
+  // QPU results don't carry num_qubits in metadata — derive from the
+  // measured bitstring length.
+  const numQubits =
+    (result.metadata?.num_qubits as number | undefined) ??
+    Object.keys(counts)[0]?.length ??
+    0;
 
   return {
     counts,
@@ -162,7 +194,7 @@ export async function pollQPUResult(
     job_id: result.job_id,
     circuit_diagram,
     metadata: {
-      num_qubits: (result.metadata?.num_qubits as number) ?? 0,
+      num_qubits: numQubits,
       circuit_depth: (result.metadata?.transpiled_depth as number) ?? 0,
       gate_count: (result.metadata?.transpiled_gates as number) ?? 0,
       simulator: result.backend ?? undefined,

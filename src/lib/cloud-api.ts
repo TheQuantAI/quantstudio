@@ -88,6 +88,8 @@ export interface CloudJobResponse {
   completed_at: string | null;
   error_message: string | null;
   metadata: Record<string, unknown>;
+  /** Submitted OpenQASM — present on the single-job GET only (STUDIO-019). */
+  circuit_qasm?: string | null;
 }
 
 export interface CloudJobResult {
@@ -239,6 +241,15 @@ export async function cloudSubmitCircuit(params: {
     },
     params.token
   );
+  return res.json();
+}
+
+/** Fetch a single job (detail — includes circuit_qasm, STUDIO-019). */
+export async function cloudGetJob(
+  jobId: string,
+  token?: string
+): Promise<CloudJobResponse> {
+  const res = await cloudFetch(`/jobs/${jobId}`, { method: "GET" }, token);
   return res.json();
 }
 

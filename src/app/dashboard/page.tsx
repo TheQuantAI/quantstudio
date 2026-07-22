@@ -15,6 +15,8 @@ import {
   Code2,
   Cpu,
   Clock,
+  ChevronDown,
+  ChevronRight,
   DollarSign,
   BarChart3,
   FileCode2,
@@ -26,6 +28,7 @@ import {
   Plus,
   Trash2,
 } from "lucide-react";
+import { JobRowDetail } from "@/components/dashboard/job-row-detail";
 import { listCircuits, type CircuitResponse } from "@/lib/api";
 import type {
   CloudUsage,
@@ -58,6 +61,8 @@ export default function DashboardPage() {
   const [copiedKey, setCopiedKey] = useState(false);
   const [isCreatingKey, setIsCreatingKey] = useState(false);
   const [dataLoading, setDataLoading] = useState(true);
+  // STUDIO-019: which job row is expanded to show its result / error detail.
+  const [expandedJobId, setExpandedJobId] = useState<string | null>(null);
 
   // Load dashboard data when authenticated
   const loadData = useCallback(async () => {
@@ -431,30 +436,48 @@ export default function DashboardPage() {
         <CardContent>
           {jobs.length > 0 ? (
             <div className="space-y-3">
-              {jobs.map((job) => (
-                <div
-                  key={job.job_id}
-                  className="flex items-center justify-between py-2 border-b border-border last:border-0"
-                >
-                  <div className="flex items-center gap-3">
-                    <div className={`w-2 h-2 rounded-full ${jobStatusColor(job.status)}`} />
-                    <div>
-                      <p className="text-sm font-medium capitalize">{jobStatusLabel(job.status)}</p>
-                      <p className="text-xs text-muted-foreground">
-                        {job.backend ?? "auto"} · {job.shots} shots
-                      </p>
-                    </div>
+              {jobs.map((job) => {
+                const expanded = expandedJobId === job.job_id;
+                return (
+                  <div key={job.job_id} className="border-b border-border last:border-0">
+                    {/* STUDIO-019: rows expand to show results (completed) or
+                        an honest error + timeline (failed/timeout/cancelled). */}
+                    <button
+                      onClick={() => setExpandedJobId(expanded ? null : job.job_id)}
+                      aria-expanded={expanded}
+                      className="flex w-full items-center justify-between rounded py-2 text-left hover:bg-accent/40"
+                    >
+                      <div className="flex items-center gap-2">
+                        {expanded ? (
+                          <ChevronDown className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+                        ) : (
+                          <ChevronRight className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+                        )}
+                        <div className={`w-2 h-2 rounded-full ${jobStatusColor(job.status)}`} />
+                        <div>
+                          <p className="text-sm font-medium capitalize">{jobStatusLabel(job.status)}</p>
+                          <p className="text-xs text-muted-foreground">
+                            {job.backend ?? "auto"} · {job.shots} shots
+                          </p>
+                        </div>
+                      </div>
+                      <div className="text-right">
+                        <code className="text-xs font-mono text-muted-foreground">
+                          {job.job_id.slice(0, 8)}
+                        </code>
+                        <p className="text-xs text-muted-foreground">
+                          {timeAgo(job.submitted_at)}
+                        </p>
+                      </div>
+                    </button>
+                    {expanded && (
+                      <div className="pb-3 pl-6">
+                        <JobRowDetail job={job} getToken={getAccessToken} />
+                      </div>
+                    )}
                   </div>
-                  <div className="text-right">
-                    <code className="text-xs font-mono text-muted-foreground">
-                      {job.job_id.slice(0, 8)}
-                    </code>
-                    <p className="text-xs text-muted-foreground">
-                      {timeAgo(job.submitted_at)}
-                    </p>
-                  </div>
-                </div>
-              ))}
+                );
+              })}
             </div>
           ) : (
             <p className="text-sm text-muted-foreground py-4 text-center">
