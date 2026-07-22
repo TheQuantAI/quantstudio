@@ -6,3 +6,4 @@ export { ResultHistogram } from "./ResultHistogram";
 export { ProbabilityBars } from "./ProbabilityBars";
 export { StateSummary } from "./StateSummary";
 export { ResultsExport } from "./ResultsExport";
+export { ResultPanels, type ResultPanelsData } from "./ResultPanels";
