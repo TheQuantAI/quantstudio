@@ -38,10 +38,20 @@ import {
   uploadFiles,
   type CloudFile,
   type CloudFolder,
+  type ConflictResolver,
   type FileType,
+  type UploadConflict,
 } from "@/lib/api";
+import { track } from "@/lib/analytics";
+import {
+  buildCreateEvent,
+  buildDeleteEvent,
+  buildUploadEvent,
+  type UploadVia,
+} from "@/lib/workspace-events";
 import { NewFileDialog } from "./new-file-dialog";
 import { TrashView } from "./trash-view";
+import { UploadConflictDialog, type ConflictAnswer } from "./upload-conflict-dialog";
 import { GettingStartedView } from "./getting-started-view";
 
 function fmtBytes(n: number): string {
@@ -78,6 +88,9 @@ export function WorkspaceExplorer({
   const [guideOpen, setGuideOpen] = useState(false);
   const uploadInputRef = useRef<HTMLInputElement>(null);
   const uploadTargetRef = useRef<string | null>(null);
+  // STUDIO-021: the open upload conflict + the pending promise's resolver.
+  const [conflict, setConflict] = useState<(UploadConflict & { dirtyOpen: boolean }) | null>(null);
+  const conflictResolverRef = useRef<((a: ConflictAnswer) => void) | null>(null);
 
   useEffect(() => {
     void loadTree();
@@ -145,6 +158,7 @@ export function WorkspaceExplorer({
     (name: string, fileType: FileType) =>
       void withBusy(async () => {
         const created = await createFile({ name, fileType, folderId: parentId ?? null });
+        track("file_created", buildCreateEvent({ fileType, folderId: parentId ?? null }));
         await refresh();
         await openFileTab(created.id); // open the new file in a tab
       });
@@ -197,6 +211,7 @@ export function WorkspaceExplorer({
         : `Move "${f.name}" and everything inside it to Trash?`;
       if (!window.confirm(msg)) return;
       await deleteFolder(f.id); // soft-delete → Trash
+      track("file_deleted", buildDeleteEvent({ action: "trash", kind: "folder" }));
       state.closeTabsByFileIds(fileIds);
       if (selectedFolderId === f.id) onSelectFolder(null);
       await refresh();
@@ -215,21 +230,77 @@ export function WorkspaceExplorer({
         return;
       }
       await deleteFile(f.id); // soft-delete → Trash (restorable for 30 days)
+      track("file_deleted", buildDeleteEvent({ action: "trash", kind: "file" }));
       state.closeTabsByFileIds([f.id]);
       await refresh();
     });
 
   // ─── Upload (local files → workspace) ───
 
-  const runUpload = (files: File[], folderId: string | null) =>
+  // STUDIO-021: name clashes pause the upload on a dialog; the facade awaits
+  // the user's answer through this promise.
+  const resolveConflict: ConflictResolver = (c) =>
+    new Promise((resolve) => {
+      conflictResolverRef.current = resolve;
+      const dirtyOpen = useCircuitStore
+        .getState()
+        .openTabs.some((t) => t.fileId === c.existingId && t.isDirty);
+      setConflict({ ...c, dirtyOpen });
+    });
+
+  const answerConflict = useCallback((answer: ConflictAnswer) => {
+    const resolve = conflictResolverRef.current;
+    conflictResolverRef.current = null;
+    setConflict(null);
+    resolve?.(answer);
+  }, []);
+
+  // Never leave an upload awaiting a dialog that no longer exists.
+  useEffect(
+    () => () => {
+      conflictResolverRef.current?.(null);
+      conflictResolverRef.current = null;
+    },
+    [],
+  );
+
+  const runUpload = (files: File[], folderId: string | null, via: UploadVia) =>
     withBusy(async () => {
       if (files.length === 0) return;
-      const { errors } = await uploadFiles(files, folderId);
+      const result = await uploadFiles(files, folderId, {
+        liveFiles: useCircuitStore.getState().tree.files,
+        resolveConflict,
+      });
+      // Replaced files keep their id — refresh any open tab with the new content.
+      const { replaceTabContent } = useCircuitStore.getState();
+      for (const [id, content] of Object.entries(result.replacedContent)) {
+        replaceTabContent(id, content);
+      }
       await refresh();
-      if (errors.length) {
+      track(
+        "file_uploaded",
+        buildUploadEvent({
+          files,
+          replaced: result.replaced.length,
+          keptBoth: result.keptBoth.length,
+          skipped: result.skipped.length,
+          failed: result.errors.length,
+          via,
+        }),
+      );
+      const { replaced, keptBoth, skipped, errors } = result;
+      if (errors.length || replaced.length || keptBoth.length || skipped.length) {
+        const plain = result.created.length - keptBoth.length;
+        const counts = [
+          plain && `${plain} uploaded`,
+          replaced.length && `${replaced.length} replaced`,
+          keptBoth.length && `${keptBoth.length} kept as copies`,
+          skipped.length && `${skipped.length} skipped`,
+          errors.length && `${errors.length} failed`,
+        ].filter(Boolean);
+        const lines = errors.map((e) => `• ${e.name}: ${e.reason}`);
         alert(
-          "Some files were not uploaded:\n" +
-            errors.map((e) => `• ${e.name}: ${e.reason}`).join("\n"),
+          `Upload: ${counts.join(", ")}.` + (lines.length ? `\n\nNot uploaded:\n${lines.join("\n")}` : ""),
         );
       }
     });
@@ -241,7 +312,7 @@ export function WorkspaceExplorer({
 
   const onUploadInput = (e: React.ChangeEvent<HTMLInputElement>) => {
     const files = Array.from(e.target.files ?? []);
-    void runUpload(files, uploadTargetRef.current);
+    void runUpload(files, uploadTargetRef.current, "picker");
     e.target.value = ""; // allow re-picking the same file
   };
 
@@ -264,7 +335,7 @@ export function WorkspaceExplorer({
     setDragOver(null);
     // OS-file drops (upload) carry dataTransfer.files; internal moves carry our MIME.
     if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
-      void runUpload(Array.from(e.dataTransfer.files), targetFolderId);
+      void runUpload(Array.from(e.dataTransfer.files), targetFolderId, "drop");
       return;
     }
     const payload = e.dataTransfer.getData(DRAG_MIME);
@@ -513,6 +584,11 @@ export function WorkspaceExplorer({
         onCreate={handleCreateFile(newFileParent)}
       />
       <TrashView open={trashOpen} onClose={() => setTrashOpen(false)} onChanged={() => void refresh()} />
+      <UploadConflictDialog
+        key={conflict ? `${conflict.existingId}:${conflict.name}` : "none"}
+        conflict={conflict}
+        onResolve={answerConflict}
+      />
       <GettingStartedView open={guideOpen} onClose={() => setGuideOpen(false)} />
     </div>
   );

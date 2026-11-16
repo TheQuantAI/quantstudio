@@ -23,6 +23,8 @@ import {
   restoreFolder,
   type TrashItem,
 } from "@/lib/api";
+import { track } from "@/lib/analytics";
+import { buildDeleteEvent } from "@/lib/workspace-events";
 
 export function TrashView({
   open,
@@ -68,15 +70,25 @@ export function TrashView({
     }
   };
 
+  // STUDIO-021: telemetry fires only after the call succeeds (inside `fn`).
   const restore = (it: TrashItem) =>
-    act(() => (it.kind === "folder" ? restoreFolder(it.id) : restoreFile(it.id)), it.id);
+    act(async () => {
+      await (it.kind === "folder" ? restoreFolder(it.id) : restoreFile(it.id));
+      track("file_deleted", buildDeleteEvent({ action: "restore", kind: it.kind }));
+    }, it.id);
   const purge = (it: TrashItem) => {
     if (!window.confirm(`Permanently delete "${it.name}"? This can't be undone.`)) return;
-    void act(() => (it.kind === "folder" ? deleteFolder(it.id, true) : deleteFile(it.id, true)), it.id);
+    void act(async () => {
+      await (it.kind === "folder" ? deleteFolder(it.id, true) : deleteFile(it.id, true));
+      track("file_deleted", buildDeleteEvent({ action: "purge", kind: it.kind }));
+    }, it.id);
   };
   const purgeAll = () => {
     if (!window.confirm("Permanently delete everything in the trash? This can't be undone.")) return;
-    void act(() => emptyTrash(), "__all__");
+    void act(async () => {
+      const count = await emptyTrash();
+      track("file_deleted", buildDeleteEvent({ action: "empty_trash", count }));
+    }, "__all__");
   };
 
   return (
