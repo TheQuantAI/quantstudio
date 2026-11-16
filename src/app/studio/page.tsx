@@ -45,6 +45,7 @@ import { syncWorkspaceFS } from "@/lib/workspace-fs";
 import { QASM_LANGUAGE_ID, QASM_MONARCH } from "@/lib/qasm-language";
 import { AuthGateModal } from "@/components/auth-gate-modal";
 import { track } from "@/lib/analytics";
+import { buildSaveEvent, buildScriptRunEvent, type SaveTrigger } from "@/lib/workspace-events";
 import { stashPendingCircuit, popPendingCircuit } from "@/lib/pending-circuit";
 import { supabase } from "@/lib/supabase";
 
@@ -200,6 +201,10 @@ export default function StudioPage() {
       .then((saved) => {
         useCircuitStore.getState().markActiveSaved(saved);
         void useCircuitStore.getState().loadTree();
+        track(
+          "file_saved",
+          buildSaveEvent({ isNew: true, fileType: "py", trigger: "pending_restore", content: pending.code }),
+        );
         addLog("success", `Saved "${saved.name}" to your workspace.`);
       })
       .catch(() => setError("Could not save your circuit — it's still in the editor."));
@@ -303,7 +308,7 @@ export default function StudioPage() {
   // Save the active tab into the workspace (API-017). New files land in the
   // explorer-selected folder (or the active tab's folder / root); existing files
   // update in place. The name carries a .py extension for runnable circuits.
-  const handleSave = useCallback(async () => {
+  const handleSave = useCallback(async (trigger: SaveTrigger = "button") => {
     // STUDIO-014: anonymous users must sign in before saving.
     if (!user) {
       setGateOpen(true);
@@ -341,6 +346,11 @@ export default function StudioPage() {
         metadata,
       });
       useCircuitStore.getState().markActiveSaved(saved);
+      // STUDIO-021: is_new = this save created the file (tab had no fileId).
+      track(
+        "file_saved",
+        buildSaveEvent({ isNew: active?.fileId == null, fileType, trigger, content: code }),
+      );
       await useCircuitStore.getState().loadTree();
       void useCircuitStore.getState().loadUsage();
       setSaveSuccess(true);
@@ -360,7 +370,7 @@ export default function StudioPage() {
       if (!(e.metaKey || e.ctrlKey) || e.key.toLowerCase() !== "s") return;
       e.preventDefault();
       if (e.repeat) return;
-      void handleSave();
+      void handleSave("shortcut");
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
@@ -489,28 +499,41 @@ export default function StudioPage() {
   // STUDIO-018: run a plain (non-circuit) .py file locally in Pyodide, output
   // in the terminal — with a Console fallback if the terminal can't come up.
   const runScriptLocally = useCallback(
-    async (codeToRun: string) => {
+    async (codeToRun: string, opts?: { fallback?: boolean }) => {
       setExecuting(true);
       setError(null);
       setTerminalOpen(true);
       setBottomTab("terminal");
       addLog("info", "No circuit detected — running this file as a Python script locally (browser Pyodide).");
+      const t0 = performance.now();
+      const fileType = useCircuitStore.getState().activeFileType; // before any tab switch
+      let success = false;
       try {
         const term = await waitForTerminal();
         if (term) {
-          await term.runCode(codeToRun, "script");
+          success = await term.runCode(codeToRun, "script");
         } else {
           setBottomTab("output");
           addLog("warn", "Terminal didn't come up — streaming script output here instead.");
           const { executePython } = await import("@/lib/python-runtime");
-          await executePython(codeToRun, (text, stream) =>
+          ({ success } = await executePython(codeToRun, (text, stream) =>
             addLog(stream === "stderr" ? "error" : "info", text),
-          );
+          ));
         }
       } catch (err) {
         addLog("error", err instanceof Error ? err.message : "Script execution failed.");
       } finally {
         setExecuting(false);
+        // STUDIO-021: local runs leave no server trace — record them (no code/content).
+        track(
+          "script_run",
+          buildScriptRunEvent({
+            success,
+            durationMs: performance.now() - t0,
+            fallback: Boolean(opts?.fallback),
+            fileType,
+          }),
+        );
       }
     },
     [addLog, setError, setExecuting, waitForTerminal],
@@ -755,7 +778,7 @@ export default function StudioPage() {
       // the compile says there's no circuit, so run the file as a script instead.
       if (msg.includes("No circuit found")) {
         setExecuting(false);
-        await runScriptLocally(code);
+        await runScriptLocally(code, { fallback: true });
         return;
       }
       addLog("error", msg);
@@ -936,7 +959,7 @@ export default function StudioPage() {
           variant="outline"
           size="sm"
           className="gap-1.5"
-          onClick={handleSave}
+          onClick={() => void handleSave("button")}
           disabled={isSaving}
           title="Save to workspace"
         >

@@ -36,6 +36,14 @@ import {
   type StorageUsage,
 } from "./cloud-api";
 import { track } from "./analytics";
+import {
+  isDuplicateNameError,
+  nextFreeName,
+  siblingsByName,
+  type ConflictChoice,
+} from "./upload-plan";
+
+export type { ConflictChoice } from "./upload-plan";
 
 const FIRST_CLOUD_RUN_KEY = "tqc-first-cloud-run";
 
@@ -651,20 +659,115 @@ export const UPLOADABLE_EXT: Record<string, FileType> = {
 };
 const MAX_UPLOAD_BYTES = 100_000;
 
+/** A name clash during upload, handed to the UI to decide (STUDIO-021). */
+export interface UploadConflict {
+  name: string;
+  /** Id of the live file that already has this name in the target folder. */
+  existingId: string;
+  /** Files in the batch not yet processed (drives "Apply to all"). */
+  remaining: number;
+}
+
+/** Resolve one conflict; `null` = cancelled (skip this and remaining conflicts). */
+export type ConflictResolver = (
+  c: UploadConflict,
+) => Promise<{ choice: ConflictChoice; applyToAll: boolean } | null>;
+
 export interface UploadResult {
+  /** Plain creates + kept-both copies. */
   created: CloudFile[];
+  /** Subset of `created` saved under a numbered name. */
+  keptBoth: CloudFile[];
+  /** Existing files overwritten in place (same id). */
+  replaced: CloudFile[];
+  /** fileId → new content, so open tabs can be refreshed. */
+  replacedContent: Record<string, string>;
+  /** Names of files the user chose to skip. */
+  skipped: string[];
   errors: { name: string; reason: string }[];
 }
 
-/** Read local text files and create them in a folder. Validates type + size;
- *  surfaces per-file errors (bad type, too large, quota). */
+function errMessage(e: unknown, fallback: string): string {
+  return e instanceof Error ? e.message : fallback;
+}
+
+/** Read local text files into a folder. Validates type + size + text content;
+ *  name clashes with live files go through `resolveConflict` (Replace = PATCH
+ *  in place, Keep both = numbered copy, Skip). Per-file errors are collected. */
 export async function uploadFiles(
   files: File[],
   folderId: string | null,
+  opts: { liveFiles: CloudFile[]; resolveConflict: ConflictResolver },
 ): Promise<UploadResult> {
   requireAuth();
-  const result: UploadResult = { created: [], errors: [] };
-  for (const file of files) {
+  const result: UploadResult = {
+    created: [],
+    keptBoth: [],
+    replaced: [],
+    replacedContent: {},
+    skipped: [],
+    errors: [],
+  };
+  let byName = siblingsByName(opts.liveFiles, folderId);
+  let sticky: ConflictChoice | null = null; // "Apply to all" / cancelled → skip
+
+  // Decide + apply one conflict. Returns nothing; records into `result`.
+  const handleConflict = async (
+    name: string,
+    fileType: FileType,
+    content: string,
+    existingId: string,
+    remaining: number,
+  ): Promise<void> => {
+    let choice: ConflictChoice;
+    if (sticky) {
+      choice = sticky;
+    } else {
+      const answer = await opts.resolveConflict({ name, existingId, remaining });
+      if (answer === null) {
+        sticky = "skip";
+        choice = "skip";
+      } else {
+        choice = answer.choice;
+        if (answer.applyToAll) sticky = answer.choice;
+      }
+    }
+    if (choice === "skip") {
+      result.skipped.push(name);
+      return;
+    }
+    if (choice === "replace") {
+      try {
+        const updated = await cloudUpdateFile(existingId, { content });
+        result.replaced.push(updated);
+        result.replacedContent[updated.id] = content;
+      } catch (e) {
+        const status = (e as { status?: unknown }).status;
+        result.errors.push({
+          name,
+          reason:
+            status === 404
+              ? "File was moved to Trash or deleted — not replaced."
+              : errMessage(e, "Replace failed"),
+        });
+      }
+      return;
+    }
+    // keep_both
+    const copyName = nextFreeName(name, new Set(byName.keys()));
+    try {
+      const created = await createFile({ name: copyName, fileType, folderId, content });
+      result.created.push(created);
+      result.keptBoth.push(created);
+      byName.set(created.name, created.id);
+    } catch (e) {
+      result.errors.push({ name, reason: errMessage(e, "Upload failed") });
+    }
+  };
+
+  for (let idx = 0; idx < files.length; idx++) {
+    const file = files[idx];
+    const remaining = files.length - idx - 1;
     const ext = file.name.split(".").pop()?.toLowerCase() ?? "";
     const fileType = UPLOADABLE_EXT[ext];
     if (!fileType) {
@@ -675,15 +778,44 @@ export async function uploadFiles(
       result.errors.push({ name: file.name, reason: "Too large (max 100 KB)" });
       continue;
     }
+    let content: string;
     try {
       // STUDIO-018: content-level check — a renamed binary (PNG-as-.csv) must
       // not land in the workspace as mojibake.
       const { decodeTextFile } = await import("./text-validation");
-      const content = decodeTextFile(await file.arrayBuffer());
+      content = decodeTextFile(await file.arrayBuffer());
+    } catch (e) {
+      result.errors.push({ name: file.name, reason: errMessage(e, "Upload failed") });
+      continue;
+    }
+
+    const existingId = byName.get(file.name);
+    if (existingId !== undefined) {
+      await handleConflict(file.name, fileType, content, existingId, remaining);
+      continue;
+    }
+    try {
       const created = await createFile({ name: file.name, fileType, folderId, content });
       result.created.push(created);
+      byName.set(created.name, created.id); // a later same-named file is a conflict
     } catch (e) {
-      result.errors.push({ name: file.name, reason: e instanceof Error ? e.message : "Upload failed" });
+      if (!isDuplicateNameError(e)) {
+        result.errors.push({ name: file.name, reason: errMessage(e, "Upload failed") });
+        continue;
+      }
+      // Race: the name appeared after our tree snapshot — re-resolve once.
+      try {
+        const tree = await fetchWorkspaceTree();
+        byName = siblingsByName(tree.files, folderId);
+      } catch {
+        /* fall through to the lookup below */
+      }
+      const raceId = byName.get(file.name);
+      if (raceId === undefined) {
+        result.errors.push({ name: file.name, reason: errMessage(e, "Upload failed") });
+        continue;
+      }
+      await handleConflict(file.name, fileType, content, raceId, remaining);
     }
   }
   return result;

@@ -133,6 +133,9 @@ interface CircuitState {
   closeTabsByFileIds: (fileIds: string[]) => void;
   /** After a successful save: bind the active tab to its file id and clear dirty. */
   markActiveSaved: (file: { id: string; name: string; folder_id: string | null }) => void;
+  /** Overwrite every open tab bound to fileId with externally replaced content
+   *  (replace-on-upload — STUDIO-021); marks them clean, re-projects if active. */
+  replaceTabContent: (fileId: string, content: string) => void;
 }
 
 const DEFAULT_CODE = `import quantsdk as qs
@@ -394,6 +397,16 @@ export const useCircuitStore = create<CircuitState>((set, get) => ({
           : t,
       );
       const active = openTabs.find((t) => t.key === s.activeKey) ?? SCRATCH_TAB;
+      return { ...projectTab(active), openTabs };
+    }),
+  replaceTabContent: (fileId, content) =>
+    set((s) => {
+      if (!s.openTabs.some((t) => t.fileId === fileId)) return {};
+      const openTabs = s.openTabs.map((t) =>
+        t.fileId === fileId ? { ...t, content, isDirty: false } : t,
+      );
+      const active = openTabs.find((t) => t.key === s.activeKey);
+      if (!active || active.fileId !== fileId) return { openTabs };
       return { ...projectTab(active), openTabs };
     }),
 }));

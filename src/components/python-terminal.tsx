@@ -12,7 +12,8 @@ import type { Terminal as XTerminal } from "@xterm/xterm";
 /** Imperative handle exposed to parent */
 export interface PythonTerminalHandle {
   /** Execute a block of code (from the editor's Run button). `kind` labels the banner (STUDIO-018). */
-  runCode: (code: string, kind?: "circuit" | "script") => Promise<void>;
+  /** Resolves true if the code ran without raising (false if not ready — STUDIO-021). */
+  runCode: (code: string, kind?: "circuit" | "script") => Promise<boolean>;
   /** Write a line to the terminal */
   writeLine: (text: string, color?: "red" | "green" | "yellow" | "cyan" | "white") => void;
   /** Clear the terminal */
@@ -74,7 +75,7 @@ const PythonTerminal = forwardRef<PythonTerminalHandle, { className?: string }>(
     /** Execute a block of code from Run button */
     const runCode = useCallback(async (code: string, kind: "circuit" | "script" = "circuit") => {
       const term = termRef.current;
-      if (!term || !isReadyRef.current) return;
+      if (!term || !isReadyRef.current) return false;
 
       isExecutingRef.current = true;
 
@@ -87,7 +88,7 @@ const PythonTerminal = forwardRef<PythonTerminalHandle, { className?: string }>(
       }
       writeLine("");
 
-      await executePython(code, (text, stream) => {
+      const { success } = await executePython(code, (text, stream) => {
         if (stream === "stderr") {
           writeLine(text, "red");
         } else {
@@ -98,6 +99,7 @@ const PythonTerminal = forwardRef<PythonTerminalHandle, { className?: string }>(
       writeLine(`${ANSI.dim}# ── Execution complete ──${ANSI.reset}`);
       showPrompt();
       isExecutingRef.current = false;
+      return success;
     }, [writeLine, showPrompt]);
 
     /** Clear the terminal */
